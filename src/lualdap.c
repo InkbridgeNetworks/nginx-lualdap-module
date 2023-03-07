@@ -1,12 +1,11 @@
 /*
 ** LuaLDAP
 ** See Copyright Notice in license.html
-** $Id: lualdap.c,v 1.48 2007-12-14 15:11:22 carregal Exp $
+** $Id: lualdap.c,v 1.48 2007/12/14 15:11:22 carregal Exp $
 */
 
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
 
 #ifdef WIN32
 #include <Winsock2.h>
@@ -17,18 +16,24 @@
 #ifdef WINLDAP
 #include "open2winldap.h"
 #else
-#include "ldap.h"
+#define LDAP_DEPRECATED 1
+#include "openldap.h"
 #endif
 
-#include <lua.h>
-#include <lauxlib.h>
-
-#if LUA_VERSION_NUM < 502
-/* lua_rawlen: Not entirely correct, but should work anyway */
-#  define lua_rawlen lua_objlen
-#  define luaL_newlib(L,l) (lua_newtable(L), luaL_register(L,NULL,l))
-#  define luaL_setfuncs(L,l,n) (assert(n==0), luaL_register(L,NULL,l))
+#define LUA_COMPAT_GETN 1
+#include "lua.h"
+#include "lauxlib.h"
+#if ! defined (LUA_VERSION_NUM) || LUA_VERSION_NUM < 501
+#include "compat-5.1.h"
 #endif
+
+#include <ngx_config.h>
+#include <ngx_core.h>
+#include <ngx_http.h>
+#include <ngx_http_lua_socket_tcp.h>
+#include <ddebug.h>
+#include <ngx_http_lua_util.h>
+#include <ngx_http_lua_uthread.h>
 
 #ifdef WINLDAPAPI
 #define timeval l_timeval
@@ -64,35 +69,44 @@ typedef const char * ldap_pchar_t;
 #define LUALDAP_MAX_VALUES (LUALDAP_ARRAY_VALUES_SIZE / 2)
 #endif
 
+#define TRUE  1
+#define FALSE 0
 
-/* LDAP connection information */
+/** LDAP connection information
+ */
 typedef struct {
-	int        version; /* LDAP version */
-	LDAP      *ld;      /* LDAP connection */
+	int					version;   		//!< LDAP version
+	LDAP          				*ld;      		//!< LDAP connection
+	ngx_peer_connection_t			conn;
+	ngx_http_lua_socket_tcp_upstream_t	*u;
 } conn_data;
 
 
-/* LDAP search context information */
+/** LDAP search context information
+ */
 typedef struct {
-	int      conn;        /* conn_data reference */
-	int      msgid;
+	int					conn;			//!< conn_data reference
+	int					msgid;
+	struct berval				*cookie;		//!< Cookie for paging
+	int					morePages;		//!< More pages are available on server
 } search_data;
 
 
-/* LDAP attribute modification structure */
+/** LDAP attribute modification structure
+ */
 typedef struct {
-	LDAPMod   *attrs[LUALDAP_MAX_ATTRS + 1];
+	LDAPMod    *attrs[LUALDAP_MAX_ATTRS + 1];
 	LDAPMod    mods[LUALDAP_MAX_ATTRS];
 	int        ai;
-	BerValue  *values[LUALDAP_ARRAY_VALUES_SIZE];
+	BerValue   *values[LUALDAP_ARRAY_VALUES_SIZE];
 	int        vi;
 	BerValue   bvals[LUALDAP_MAX_VALUES];
 	int        bi;
 } attrs_data;
 
-
 int luaopen_lualdap (lua_State *L);
 
+#include "lualdap-ngx.c"
 
 /*
 ** Typical error situation.
@@ -146,18 +160,18 @@ static int option_error (lua_State *L, const char *name, const char *type) {
 /*
 ** Get the field called name of the table at position 2.
 */
-static void strgettable (lua_State *L, int idx, const char *name) {
+static void strgettable (lua_State *L, const char *name) {
 	lua_pushstring (L, name);
-	lua_gettable (L, idx);
+	lua_gettable (L, 3);
 }
 
 
 /*
 ** Get the field named name as a string.
-** The table MUST be at position 2.
+** The table MUST be at position 3.
 */
-static const char *strtabparam (lua_State *L, int idx, const char *name, char *def) {
-	strgettable (L, idx, name);
+static const char *strtabparam (lua_State *L, const char *name, char *def) {
+	strgettable (L, name);
 	if (lua_isnil (L, -1))
 		return def;
 	else if (lua_isstring (L, -1))
@@ -171,10 +185,10 @@ static const char *strtabparam (lua_State *L, int idx, const char *name, char *d
 
 /*
 ** Get the field named name as an integer.
-** The table MUST be at position 2.
+** The table MUST be at position 3.
 */
-static long longtabparam (lua_State *L, int idx, const char *name, int def) {
-	strgettable (L, idx, name);
+static long longtabparam (lua_State *L, const char *name, int def) {
+	strgettable (L, name);
 	if (lua_isnil (L, -1))
 		return def;
 	else if (lua_isnumber (L, -1))
@@ -186,10 +200,10 @@ static long longtabparam (lua_State *L, int idx, const char *name, int def) {
 
 /*
 ** Get the field named name as a double.
-** The table MUST be at position 2.
+** The table MUST be at position 3.
 */
-static double numbertabparam (lua_State *L, int idx, const char *name, double def) {
-	strgettable (L, idx, name);
+static double numbertabparam (lua_State *L, const char *name, double def) {
+	strgettable (L, name);
 	if (lua_isnil (L, -1))
 		return def;
 	else if (lua_isnumber (L, -1))
@@ -201,16 +215,28 @@ static double numbertabparam (lua_State *L, int idx, const char *name, double de
 
 /*
 ** Get the field named name as a boolean.
-** The table MUST be at position 2.
+** The table MUST be at position 3.
 */
 static int booltabparam (lua_State *L, const char *name, int def) {
-	strgettable (L, 2, name);
+	strgettable (L, name);
 	if (lua_isnil (L, -1))
 		return def;
 	else if (lua_isboolean (L, -1))
 		return lua_toboolean (L, -1);
 	else
 		return option_error (L, name, "boolean");
+}
+
+/*
+** Get the field named name as a boolean.
+** The table MUST be at position 3.
+*/
+static search_data * userdatatabparam (lua_State *L, const char *name) {
+	strgettable (L, name);
+	if (lua_isnil (L, -1))
+		return NULL;
+	else
+		return (search_data *)lua_touserdata (L, -1);
 }
 
 
@@ -248,7 +274,7 @@ static BerValue *A_setbval (lua_State *L, attrs_data *a, const char *n) {
 		value_error (L, n);
 		return NULL;
 	}
-	a->bvals[a->bi].bv_len = lua_rawlen (L, -1);
+	a->bvals[a->bi].bv_len = lua_strlen (L, -1);
 	a->bvals[a->bi].bv_val = (char *)lua_tostring (L, -1);
 	a->bi++;
 	return ret;
@@ -301,7 +327,7 @@ static BerValue **A_tab2val (lua_State *L, attrs_data *a, const char *name) {
 		A_setval (L, a, name);
 	else if (lua_istable (L, tab)) { /* list of strings */
 		int i;
-		int n = lua_rawlen (L, tab);
+		int n = lua_objlen(L, tab);
 		for (i = 1; i <= n; i++) {
 			lua_rawgeti (L, tab, i); /* push table element */
 			A_setval (L, a, name);
@@ -373,7 +399,7 @@ static int table2strarray (lua_State *L, int tab, char *array[], int limit) {
 		array[1] = NULL;
 	} else if (lua_istable (L, tab)) {
 		int i;
-		int n = lua_rawlen (L, tab);
+		int n = lua_objlen(L, tab);
 		if (limit < (n+1))
 			return luaL_error (L, LUALDAP_PREFIX"too many arguments");
 		for (i = 0; i < n; i++) {
@@ -392,69 +418,83 @@ static int table2strarray (lua_State *L, int tab, char *array[], int limit) {
 
 
 /*
-** Fill in the struct timeval, according to the timeout parameter.
-*/
-static struct timeval *get_timeout_param (lua_State *L, int idx, struct timeval *st) {
-	double t = numbertabparam (L, idx, "timeout", -1);
-	if(t < 0)
-		return NULL; /* No timeout, block */
-	st->tv_sec = (long)t;
-	st->tv_usec = (long)(1000000 * (t - st->tv_sec));
-	return st;
-}
-
-/*
 ** Get the result message of an operation.
 ** #1 upvalue == connection
 ** #2 upvalue == msgid
 ** #3 upvalue == result code of the message (ADD, DEL etc.) to be received.
 */
-static int result_message (lua_State *L) {
-	struct timeval timeout;
-	LDAPMessage *res;
-	int rc;
+static int result_message(lua_State *L) {
+	int rc = 0;
 	conn_data *conn = (conn_data *)lua_touserdata (L, lua_upvalueindex (1));
 	int msgid = (int)lua_tonumber (L, lua_upvalueindex (2));
 	/*int res_code = (int)lua_tonumber (L, lua_upvalueindex (3));*/
+	ngx_http_lua_socket_tcp_upstream_t *u;
+	ngx_http_request_t *r;
+	ngx_http_lua_ctx_t *ctx;
+	ngx_http_lua_co_ctx_t *coctx;
+	op_ctx_t *op_ctx;
+
+	const int timeout = luaL_optnumber (L, 1, 1000);
 
 	luaL_argcheck (L, conn->ld, 1, LUALDAP_PREFIX"LDAP connection is closed");
-	rc = ldap_result (conn->ld, msgid, LDAP_MSG_ONE, get_timeout_param (L, 1, &timeout), &res);
-	if (rc == 0)
-		return faildirect (L, LUALDAP_PREFIX"result timeout expired");
-	else if (rc < 0) {
-		ldap_msgfree (res);
-		return faildirect (L, LUALDAP_PREFIX"result error");
-	} else {
-		int err, ret = 1;
-		char *mdn, *msg;
-		rc = ldap_parse_result (conn->ld, res, &err, &mdn, &msg, NULL, NULL, 1);
-		if (rc != LDAP_SUCCESS)
-			return faildirect (L, ldap_err2string (rc));
-		switch (err) {
-			case LDAP_SUCCESS:
-			case LDAP_COMPARE_TRUE:
-				lua_pushboolean (L, 1);
-				break;
-			case LDAP_COMPARE_FALSE:
-				lua_pushboolean (L, 0);
-				break;
-			default:
-				lua_pushnil (L);
-				lua_pushliteral (L, LUALDAP_PREFIX);
-				lua_pushstring (L, ldap_err2string(err));
-				lua_concat (L, 2);
-				if (msg != NULL) {
-					lua_pushliteral (L, " (");
-					lua_pushstring (L, msg);
-					lua_pushliteral (L, ")");
-					lua_concat (L, 4);
-				}
-				ret = 2;
-		}
-		ldap_memfree (mdn);
-		ldap_memfree (msg);
-		return ret;
+
+	u = conn->u;
+	r = u->request;
+
+	conn->conn.connection->write->handler = ldap_socket_handler;
+	conn->conn.connection->read->handler = ldap_socket_handler;
+	ngx_add_timer(conn->conn.connection->read, timeout);
+
+	op_ctx = ngx_alloc(sizeof(op_ctx_t), r->connection->log);
+	op_ctx->u = u;
+	op_ctx->conn = conn;
+	op_ctx->msgid = msgid;
+
+	rc = ldap_get_next_message_with_ctx(r, u, op_ctx);
+
+	if (rc == NGX_ERROR) {
+		dd("next_message read failed: %d", (int) u->ft_type);
+		rc = ngx_http_lua_socket_tcp_receive_retval_handler(r, u, L);
+		dd("tcp receive retval returned: %d", (int) rc);
+		return rc;
 	}
+
+	if (rc == NGX_OK) {
+		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "lua tcp socket receive done in a single run");
+		ngx_http_lua_socket_handle_write_success(r, u);
+
+		return ldap_operation_receive_retval_handler(r, u, L);
+	}
+
+	/* rc == NGX_AGAIN */
+	u->read_event_handler = ldap_search_handler;
+
+	ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
+	coctx = ctx->cur_co_ctx;
+
+	ngx_http_lua_cleanup_pending_operation(coctx);
+	coctx->cleanup = ngx_http_lua_coctx_cleanup;
+
+	coctx->data = op_ctx;
+
+	if (ctx->entered_content_phase) {
+		r->write_event_handler = ngx_http_lua_content_wev_handler;
+	} else {
+		r->write_event_handler = ngx_http_core_run_phases;
+	}
+
+	u->read_co_ctx = coctx;
+	u->read_waiting = 1;
+	u->read_prepare_retvals = ldap_operation_receive_retval_handler;
+
+	dd("setting data to %p, coctx:%p", u, coctx);
+
+	if (u->raw_downstream || u->body_downstream) {
+		ctx->downstream = u;
+	}
+
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "yielding from %s", __FUNCTION__);
+	return lua_yield(L, 0);
 }
 
 
@@ -481,11 +521,7 @@ static int lualdap_close (lua_State *L) {
 	luaL_argcheck(L, conn!=NULL, 1, LUALDAP_PREFIX"LDAP connection expected");
 	if (conn->ld == NULL) /* already closed */
 		return 0;
-#if defined(LDAP_API_FEATURE_X_OPENLDAP) && LDAP_API_FEATURE_X_OPENLDAP >= 20300
-	ldap_unbind_ext (conn->ld, NULL, NULL);
-#else
-	ldap_unbind (conn->ld);
-#endif
+//	ldap_unbind (conn->ld);
 	conn->ld = NULL;
 	lua_pushnumber (L, 1);
 	return 1;
@@ -493,51 +529,24 @@ static int lualdap_close (lua_State *L) {
 
 
 /*
-** Bind to the directory.
-** @param #1 LDAP connection.
-** @param #2 String with username.
-** @param #3 String with password.
-** @return Boolean.
-*/
-static int lualdap_bind_simple (lua_State *L) {
-	conn_data *conn = getconnection (L);
-	ldap_pchar_t who = (ldap_pchar_t) luaL_checkstring (L, 2);
-	const char *password = luaL_checkstring (L, 3);
-	int err;
-#if defined(LDAP_API_FEATURE_X_OPENLDAP) && LDAP_API_FEATURE_X_OPENLDAP >= 20300
-	struct berval cred = { 0, NULL };
-	cred.bv_len = strlen(password);
-	cred.bv_val = malloc(cred.bv_len+1);
-	strcpy(cred.bv_val, password);
-	err = ldap_sasl_bind_s (conn->ld, who, LDAP_SASL_SIMPLE, &cred, NULL, NULL, NULL);
-	free(cred.bv_val);
-	memset(&cred, 0, sizeof(cred));
-#else
-	err = ldap_simple_bind_s (conn->ld, who, password);
-#endif
-	if (err != LDAP_SUCCESS)
-		return faildirect (L, ldap_err2string (err));
-	
-	lua_pushboolean (L, 1);
-	return 1;
-}
-
-
-/*
 ** Add a new entry to the directory.
 ** @param #1 LDAP connection.
-** @param #2 String with new entry's DN.
-** @param #3 Table with new entry's attributes and values.
+** @param #2 Socket object
+** @param #3 String with new entry's DN.
+** @param #4 Table with new entry's attributes and values.
 ** @return Function to process the LDAP result.
 */
 static int lualdap_add (lua_State *L) {
 	conn_data *conn = getconnection (L);
-	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 2);
+	update_socket(L, conn);
+
+	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
 	attrs_data attrs;
-	ldap_int_t rc, msgid;
+	ldap_int_t rc;
+	int msgid;
 	A_init (&attrs);
-	if (lua_istable (L, 3))
-		A_tab2mod (L, &attrs, 3, LUALDAP_MOD_ADD);
+	if (lua_istable (L, 4))
+		A_tab2mod (L, &attrs, 4, LUALDAP_MOD_ADD);
 	A_lastattr (L, &attrs);
 	rc = ldap_add_ext (conn->ld, dn, attrs.attrs, NULL, NULL, &msgid);
 	return create_future (L, rc, 1, msgid, LDAP_RES_ADD);
@@ -547,19 +556,23 @@ static int lualdap_add (lua_State *L) {
 /*
 ** Compare a value against an entry.
 ** @param #1 LDAP connection.
-** @param #2 String with entry's DN.
-** @param #3 String with attribute's name.
-** @param #4 String with attribute's value.
+** @param #2 Socket object
+** @param #3 String with entry's DN.
+** @param #4 String with attribute's name.
+** @param #5 String with attribute's value.
 ** @return Function to process the LDAP result.
 */
 static int lualdap_compare (lua_State *L) {
 	conn_data *conn = getconnection (L);
-	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 2);
-	ldap_pchar_t attr = (ldap_pchar_t) luaL_checkstring (L, 3);
+	update_socket(L, conn);
+
+	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
+	ldap_pchar_t attr = (ldap_pchar_t) luaL_checkstring (L, 4);
 	BerValue bvalue;
-	ldap_int_t rc, msgid;
-	bvalue.bv_val = (char *)luaL_checkstring (L, 4);
-	bvalue.bv_len = lua_rawlen (L, 4);
+	ldap_int_t rc;
+	int msgid;
+	bvalue.bv_val = (char *)luaL_checkstring (L, 5);
+	bvalue.bv_len = lua_strlen (L, 5);
 	rc = ldap_compare_ext (conn->ld, dn, attr, &bvalue, NULL, NULL, &msgid);
 	return create_future (L, rc, 1, msgid, LDAP_RES_COMPARE);
 }
@@ -568,13 +581,17 @@ static int lualdap_compare (lua_State *L) {
 /*
 ** Delete an entry.
 ** @param #1 LDAP connection.
-** @param #2 String with entry's DN.
+** @param #2 Socket object
+** @param #3 String with entry's DN.
 ** @return Boolean.
 */
 static int lualdap_delete (lua_State *L) {
 	conn_data *conn = getconnection (L);
-	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 2);
-	ldap_int_t rc, msgid;
+	update_socket(L, conn);
+
+	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
+	ldap_int_t rc;
+	int msgid;
 	rc = ldap_delete_ext (conn->ld, dn, NULL, NULL, &msgid);
 	return create_future (L, rc, 1, msgid, LDAP_RES_DELETE);
 }
@@ -602,16 +619,20 @@ static int op2code (const char *s) {
 /*
 ** Modify an entry.
 ** @param #1 LDAP connection.
-** @param #2 String with entry's DN.
-** @param #3, #4... Tables with modifications to apply.
+** @param #2 Socket object
+** @param #3 String with entry's DN.
+** @param #4, #5... Tables with modifications to apply.
 ** @return True on success or nil, error message otherwise.
 */
 static int lualdap_modify (lua_State *L) {
 	conn_data *conn = getconnection (L);
-	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 2);
+	update_socket(L, conn);
+
+	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
 	attrs_data attrs;
-	ldap_int_t rc, msgid;
-	int param = 3;
+	ldap_int_t rc;
+	int msgid;
+	int param = 4;
 	A_init (&attrs);
 	while (lua_istable (L, param)) {
 		int op;
@@ -635,11 +656,13 @@ static int lualdap_modify (lua_State *L) {
 */
 static int lualdap_rename (lua_State *L) {
 	conn_data *conn = getconnection (L);
-	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 2);
-	ldap_pchar_t rdn = (ldap_pchar_t) luaL_checkstring (L, 3);
-	ldap_pchar_t par = (ldap_pchar_t) luaL_optlstring (L, 4, NULL, NULL);
-	const int del = luaL_optnumber (L, 5, 0);
-	ldap_int_t msgid;
+	update_socket(L, conn);
+
+	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
+	ldap_pchar_t rdn = (ldap_pchar_t) luaL_checkstring (L, 4);
+	ldap_pchar_t par = (ldap_pchar_t) luaL_optlstring (L, 5, NULL, NULL);
+	const int del = luaL_optnumber (L, 6, 0);
+	int msgid;
 	ldap_int_t rc = ldap_rename (conn->ld, dn, rdn, par, del, NULL, NULL, &msgid);
 	return create_future (L, rc, 1, msgid, LDAP_RES_MODDN);
 }
@@ -697,7 +720,7 @@ static void set_attribs (lua_State *L, LDAP *ld, LDAPMessage *entry, int tab) {
 /*
 ** Get the distinguished name of the given entry and pushes it on the stack.
 */
-static void push_dn (lua_State *L, LDAP *ld, LDAPMessage *entry) {
+static void push_dn(lua_State *L, LDAP *ld, LDAPMessage *entry) {
 	char *dn = ldap_get_dn (ld, entry);
 	lua_pushstring (L, dn);
 	ldap_memfree (dn);
@@ -707,72 +730,123 @@ static void push_dn (lua_State *L, LDAP *ld, LDAPMessage *entry) {
 /*
 ** Release connection reference.
 */
-static void search_close (lua_State *L, search_data *search) {
+static void search_close(lua_State *L, search_data *search) {
 	luaL_unref (L, LUA_REGISTRYINDEX, search->conn);
 	search->conn = LUA_NOREF;
+	if (search->cookie != NULL) {
+		ber_bvfree(search->cookie);
+		search->cookie = NULL;
+	}
 }
 
 
 /*
-** Retrieve next message...
+** Get next LDAP message...
 ** @return #1 entry's distinguished name.
 ** @return #2 table with entry's attributes and values.
 */
-static int next_message (lua_State *L) {
+static int ldap_get_next_message(ngx_http_request_t *r, ngx_http_lua_socket_tcp_upstream_t *u) {
+	ngx_http_lua_ctx_t *ctx;
+	ngx_http_lua_co_ctx_t *coctx;
+	op_ctx_t *op_ctx;
+
+	ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
+	if (ctx == NULL) {
+		return NGX_ERROR;
+	}
+
+	coctx = ctx->cur_co_ctx;
+	if (!coctx) {
+		coctx = u->read_co_ctx;
+	}
+
+	op_ctx = coctx->data;
+
+	return ldap_get_next_message_with_ctx(r, u, op_ctx);
+}
+
+/** Iterator which is meant to
+ *
+ * Retrieve next message...
+ * @return #1 entry's distinguished name.
+ * @return #2 table with entry's attributes and values.
+ */
+static int next_message(lua_State *L) {
 	search_data *search = getsearch (L);
 	conn_data *conn;
-	struct timeval timeout;
-	LDAPMessage *res;
 	int rc;
-	int ret;
+	ngx_http_lua_socket_tcp_upstream_t *u;
+	ngx_http_request_t *r;
+	ngx_http_lua_ctx_t *ctx;
+	ngx_http_lua_co_ctx_t *coctx;
+	op_ctx_t *op_ctx;
 
-	luaL_checktype(L, 1, LUA_TTABLE);
+	r = ngx_http_lua_get_req(L);
+	if (r == NULL) {
+		return luaL_error(L, "no request found");
+	}
+	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "entering iterator aka next_message");
 
 	lua_rawgeti (L, LUA_REGISTRYINDEX, search->conn);
-	conn = (conn_data *)lua_touserdata (L, -1); /* get connection */
+	conn = (conn_data *)lua_touserdata(L, -1); /* get connection */
 
-	rc = ldap_result (conn->ld, search->msgid, LDAP_MSG_ONE, get_timeout_param (L, 1, &timeout), &res);
-	if (rc == 0)
-		return faildirect (L, LUALDAP_PREFIX"result timeout expired");
-	else if (rc == -1)
-		return faildirect (L, LUALDAP_PREFIX"result error");
-	else if (rc == LDAP_RES_SEARCH_RESULT) { /* last message => nil */
-		/* close search object to avoid reuse */
-		search_close (L, search);
-		ret = 0;
-	} else {
-		LDAPMessage *msg = ldap_first_message (conn->ld, res);
-		switch (ldap_msgtype (msg)) {
-			case LDAP_RES_SEARCH_ENTRY: {
-				LDAPMessage *entry = ldap_first_entry (conn->ld, msg);
-				push_dn (L, conn->ld, entry);
-				lua_newtable (L);
-				set_attribs (L, conn->ld, entry, lua_gettop (L));
-				ret = 2; /* two return values */
-				break;
-			}
-/*No reference to LDAP_RES_SEARCH_REFERENCE on MSDN. Maybe there is a replacement to it?*/
-#ifdef LDAP_RES_SEARCH_REFERENCE
-			case LDAP_RES_SEARCH_REFERENCE: {
-				LDAPMessage *ref = ldap_first_reference (conn->ld, msg);
-				push_dn (L, conn->ld, ref); /* is this supposed to work? */
-				lua_pushnil (L);
-				ret = 2; /* two return values */
-				break;
-			}
-#endif
-			case LDAP_RES_SEARCH_RESULT:
-				/* close search object to avoid reuse */
-				search_close (L, search);
-				ret = 0;
-				break;
-			default:
-				ldap_msgfree (res);
-				return luaL_error (L, LUALDAP_PREFIX"error on search result chain");
+	const int timeout = luaL_optnumber(L, 1, 1000);
+
+	u = conn->u;
+
+	conn->conn.connection->write->handler = ldap_socket_handler;
+	conn->conn.connection->read->handler = ldap_socket_handler;
+	ngx_add_timer(conn->conn.connection->read, timeout);
+
+	op_ctx = ngx_alloc(sizeof(op_ctx_t), r->connection->log);
+	op_ctx->u = u;
+	op_ctx->conn = conn;
+	op_ctx->msgid = search->msgid;
+
+	switch (rc = ldap_get_next_message_with_ctx(r, u, op_ctx)) {
+	case NGX_ERROR:
+	default:
+		ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "next_message read failed: %d", (int) u->ft_type);
+		rc = ngx_http_lua_socket_tcp_receive_retval_handler(r, u, L);
+		dd("tcp receive retval returned: %d", (int) rc);
+		return rc;
+	
+	case NGX_OK:
+		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "lua tcp socket receive done in a single run");
+
+		return ldap_search_receive_retval_handler(r, u, L);
+	
+	case NGX_AGAIN:
+		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "waiting asynchronously for search result");
+		u->read_event_handler = ldap_search_handler;
+
+		ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
+		coctx = ctx->cur_co_ctx;
+
+		ngx_http_lua_cleanup_pending_operation(coctx);
+		coctx->cleanup = ngx_http_lua_coctx_cleanup;
+
+		coctx->data = op_ctx;
+
+		if (ctx->entered_content_phase) {
+			r->write_event_handler = ngx_http_lua_content_wev_handler;
+		} else {
+			r->write_event_handler = ngx_http_core_run_phases;
 		}
+
+		u->read_co_ctx = coctx;
+		u->read_waiting = 1;
+		u->read_prepare_retvals = ldap_search_receive_retval_handler;
+
+		ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "setting data to %p, coctx:%p", u, coctx);
+
+		if (u->raw_downstream || u->body_downstream) {
+			ctx->downstream = u;
+		}
+
+		ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "yielding from %s", __FUNCTION__);
+		return lua_yield(L, 0);
 	}
-	ldap_msgfree (res);
-	return ret;
 }
 
 
@@ -798,7 +872,7 @@ static int string2scope (lua_State *L, const char *s) {
 /*
 ** Close the search object.
 */
-static int lualdap_search_close (lua_State *L) {
+static int lualdap_search_close(lua_State *L) {
 	search_data *search = (search_data *)luaL_checkudata (L, 1, LUALDAP_SEARCH_METATABLE);
 	luaL_argcheck (L, search!=NULL, 1, LUALDAP_PREFIX"LDAP search expected");
 	if (search->conn == LUA_NOREF)
@@ -812,13 +886,17 @@ static int lualdap_search_close (lua_State *L) {
 /*
 ** Create a search object and leaves it on top of the stack.
 */
-static void create_search (lua_State *L, int conn_index, int msgid) {
+static search_data * create_search(lua_State *L, int conn_index, int msgid, struct berval *cookie) {
 	search_data *search = (search_data *)lua_newuserdata (L, sizeof (search_data));
 	lualdap_setmeta (L, LUALDAP_SEARCH_METATABLE);
 	search->conn = LUA_NOREF;
 	search->msgid = msgid;
+	search->cookie = cookie;
+	search->morePages = FALSE;
 	lua_pushvalue (L, conn_index);
 	search->conn = luaL_ref (L, LUA_REGISTRYINDEX);
+
+	return search;
 }
 
 
@@ -827,16 +905,32 @@ static void create_search (lua_State *L, int conn_index, int msgid) {
 */
 static int get_attrs_param (lua_State *L, char *attrs[]) {
 	lua_pushstring (L, "attrs");
-	lua_gettable (L, 2);
+	lua_gettable (L, 3);
 	if (lua_isstring (L, -1)) {
 		attrs[0] = (char *)lua_tostring (L, -1);
 		attrs[1] = NULL;
 	} else if (!lua_istable (L, -1))
 		attrs[0] = NULL;
-	else
+	else {
+		attrs[0] = NULL;
 		if (table2strarray (L, lua_gettop (L), attrs, LUALDAP_MAX_ATTRS))
 			return 0;
+	}
 	return 1;
+}
+
+
+/*
+** Fill in the struct timeval, according to the timeout parameter.
+*/
+static struct timeval *get_timeout_param (lua_State *L, struct timeval *st) {
+	double t = numbertabparam (L, "timeout", 0);
+	st->tv_sec = (long)t;
+	st->tv_usec = (long)(1000000 * (t - st->tv_sec));
+	if (st->tv_sec == 0 && st->tv_usec == 0)
+		return NULL;
+	else
+		return st;
 }
 
 
@@ -852,29 +946,72 @@ static int lualdap_search (lua_State *L) {
 	ldap_pchar_t base;
 	ldap_pchar_t filter;
 	char *attrs[LUALDAP_MAX_ATTRS];
-	int scope, attrsonly, msgid, rc, sizelimit;
+	int scope, attrsonly, rc, sizelimit, pagesize;
 	struct timeval st, *timeout;
+	LDAPControl *pageControl=NULL, *controls[2] = { NULL, NULL };
+	struct berval *cookie = NULL;   /* Cookie for paging */
+	search_data * current_search;
+	ngx_http_request_t          *r;
+	int msgid;
+
 
 	if (!lua_istable (L, 2))
+		return luaL_error (L, LUALDAP_PREFIX"no connection socket");
+	if (!lua_istable (L, 3))
 		return luaL_error (L, LUALDAP_PREFIX"no search specification");
 	if (!get_attrs_param (L, attrs))
 		return 2;
+
+	/* Update internal connection to use new connection from pool */
+	update_socket(L, conn);
+
+	r = ngx_http_lua_get_req(L);
+	if (r == NULL) {
+		return luaL_error(L, "no request found");
+	}
+
 	/* get other parameters */
 	attrsonly = booltabparam (L, "attrsonly", 0);
-	base = (ldap_pchar_t) strtabparam (L, 2, "base", NULL);
-	filter = (ldap_pchar_t) strtabparam (L, 2, "filter", NULL);
-	scope = string2scope (L, strtabparam (L, 2, "scope", NULL));
-	sizelimit = longtabparam (L, 2, "sizelimit", LDAP_NO_LIMIT);
-	timeout = get_timeout_param (L, 2, &st);
+	base = (ldap_pchar_t) strtabparam (L, "base", NULL);
+	filter = (ldap_pchar_t) strtabparam (L, "filter", NULL);
+	scope = string2scope (L, strtabparam (L, "scope", NULL));
+	sizelimit = longtabparam (L, "sizelimit", LDAP_NO_LIMIT);
+	pagesize = longtabparam (L, "pagesize", 0);
+        current_search = userdatatabparam(L, "search");
+	timeout = get_timeout_param (L, &st);
+
+	if (pagesize) {
+		if (current_search) {
+			cookie = current_search->cookie;
+		}
+		rc = ldap_create_page_control(conn->ld, pagesize, cookie, 1, &pageControl);
+		if (rc != LDAP_SUCCESS) {
+                	return luaL_error (L, LUALDAP_PREFIX"%s", ldap_err2string (rc));
+		}
+
+		/* Insert the control into a list to be passed to the search. */
+		controls[0] = pageControl;
+	}
 
 	rc = ldap_search_ext (conn->ld, base, scope, filter, attrs, attrsonly,
-		NULL, NULL, timeout, sizelimit, &msgid);
+		controls, NULL, timeout, sizelimit, &msgid);
 	if (rc != LDAP_SUCCESS)
 		return luaL_error (L, LUALDAP_PREFIX"%s", ldap_err2string (rc));
 
-	create_search (L, 1, msgid);
-	lua_pushcclosure (L, next_message, 1);
-	lua_pushvalue(L, 2);
+	ldap_control_free(pageControl);
+
+	if (current_search) {
+		create_search(L, 1, msgid, current_search->cookie);
+		/* Set cookie to NULL to avoid double free */
+		current_search->cookie = NULL;
+	} else {
+		create_search(L, 1, msgid, cookie);
+	}
+	lua_pushvalue (L, -1);
+	lua_pushcclosure(L, next_message, 1);	/* This is the ierator the caller can use to page out results */
+	lua_pushvalue (L, -2);
+	lua_remove(L, -3);
+
 	return 2;
 }
 
@@ -911,20 +1048,34 @@ static int lualdap_search_tostring (lua_State *L) {
 	return 1;
 }
 
+/*
+** Return true if there more pages to be read
+** or false otherwise
+*/
+static int lualdap_more_pages (lua_State *L) {
+	search_data *search = (search_data *)lua_touserdata (L, 1);
+	lua_pushboolean (L, search->morePages);
+	return 1;
+}
 
 /*
 ** Create a metatable.
 */
 static int lualdap_createmeta (lua_State *L) {
-	const luaL_Reg methods[] = {
+	const luaL_Reg conn_methods[] = {
 		{"close", lualdap_close},
-		{"bind_simple", lualdap_bind_simple},
 		{"add", lualdap_add},
 		{"compare", lualdap_compare},
 		{"delete", lualdap_delete},
 		{"modify", lualdap_modify},
 		{"rename", lualdap_rename},
 		{"search", lualdap_search},
+		{"init_fd", lualdap_init_fd},
+		{NULL, NULL}
+	};
+
+	const luaL_Reg search_methods[] = {
+		{"more_pages", lualdap_more_pages},
 		{NULL, NULL}
 	};
 
@@ -932,7 +1083,7 @@ static int lualdap_createmeta (lua_State *L) {
 		return 0;
 
 	/* define methods */
-	luaL_setfuncs(L, methods, 0);
+	luaL_openlib (L, NULL, conn_methods, 0);
 
 	/* define metamethods */
 	lua_pushliteral (L, "__gc");
@@ -954,12 +1105,19 @@ static int lualdap_createmeta (lua_State *L) {
 	if (!luaL_newmetatable (L, LUALDAP_SEARCH_METATABLE))
 		return 0;
 
+	/* define methods */
+	luaL_openlib (L, NULL, search_methods, 0);
+
 	lua_pushliteral (L, "__gc");
 	lua_pushcfunction (L, lualdap_search_close);
 	lua_settable (L, -3);
 
+	lua_pushliteral (L, "__index");
+	lua_pushvalue (L, -2);
+	lua_settable (L, -3);
+
 	lua_pushliteral (L, "__tostring");
-	lua_pushcclosure (L, lualdap_search_tostring, 1);
+	lua_pushcfunction (L, lualdap_search_tostring);
 	lua_settable (L, -3);
 
 	lua_pushliteral (L, "__metatable");
@@ -967,35 +1125,6 @@ static int lualdap_createmeta (lua_State *L) {
 	lua_settable (L, -3);
 
 	return 0;
-}
-
-
-/*
-** Open and initialize a connection to a server (without binding).
-** @param #1 String with URI.
-** @return #1 Userdata with connection structure.
-*/
-static int lualdap_initialize (lua_State *L) {
-	ldap_pchar_t uri = (ldap_pchar_t) luaL_checkstring (L, 1);
-	conn_data *conn = (conn_data *)lua_newuserdata (L, sizeof(conn_data));
-	int err;
-	int lev=7;
-
-	/* Initialize */
-	lualdap_setmeta (L, LUALDAP_CONNECTION_METATABLE);
-	conn->version = 0;
-	err = ldap_initialize (&conn->ld, uri);
-	if (err != LDAP_SUCCESS)
-		return faildirect(L, ldap_err2string(err));
-	
-	/* Set protocol version */
-	conn->version = LDAP_VERSION3;
-	if (ldap_set_option (conn->ld, LDAP_OPT_PROTOCOL_VERSION, &conn->version)
-		!= LDAP_OPT_SUCCESS)
-		return faildirect(L, LUALDAP_PREFIX"Error setting LDAP version");
-	ldap_set_option(conn->ld, LDAP_OPT_DEBUG_LEVEL, &lev);
-
-	return 1;
 }
 
 /*
@@ -1012,27 +1141,14 @@ static int lualdap_open_simple (lua_State *L) {
 	const char *password = luaL_optstring (L, 3, NULL);
 	int use_tls = lua_toboolean (L, 4);
 	conn_data *conn = (conn_data *)lua_newuserdata (L, sizeof(conn_data));
-#if defined(LDAP_API_FEATURE_X_OPENLDAP) && LDAP_API_FEATURE_X_OPENLDAP >= 20300
-	struct berval *cred = NULL;
-	char *host_with_schema = NULL;
-#endif
 	int err;
 
 	/* Initialize */
 	lualdap_setmeta (L, LUALDAP_CONNECTION_METATABLE);
 	conn->version = 0;
-#if defined(LDAP_API_FEATURE_X_OPENLDAP) && LDAP_API_FEATURE_X_OPENLDAP >= 20300
-	host_with_schema = malloc(strlen(host) + 8);
-	strcpy(host_with_schema, "ldap://");
-	strcat(host_with_schema, host);
-	err = ldap_initialize(&conn->ld, host_with_schema);
-	free(host_with_schema);
-	host_with_schema = NULL;
-	if (err != LDAP_SUCCESS)
-#else
-	conn->ld = ldap_init (host, LDAP_PORT);
-	if (conn->ld == NULL)
-#endif
+
+	err = ldap_initialize( &conn->ld, host);
+	if (err)
 		return faildirect(L,LUALDAP_PREFIX"Error connecting to server");
 	/* Set protocol version */
 	conn->version = LDAP_VERSION3;
@@ -1046,13 +1162,7 @@ static int lualdap_open_simple (lua_State *L) {
 			return faildirect (L, ldap_err2string (rc));
 	}
 	/* Bind to a server */
-#if defined(LDAP_API_FEATURE_X_OPENLDAP) && LDAP_API_FEATURE_X_OPENLDAP >= 20300
-	cred = ber_bvstrdup(password);
-	err = ldap_sasl_bind_s (conn->ld, who, LDAP_SASL_SIMPLE, cred, NULL, NULL, NULL);
-	ber_bvfree(cred);
-#else
 	err = ldap_bind_s (conn->ld, who, password, LDAP_AUTH_SIMPLE);
-#endif
 	if (err != LDAP_SUCCESS)
 		return faildirect (L, ldap_err2string (err));
 
@@ -1071,25 +1181,26 @@ static void set_info (lua_State *L) {
 	lua_pushliteral (L, "LuaLDAP is a simple interface from Lua to an LDAP client");
 	lua_settable (L, -3);
 	lua_pushliteral (L, "_VERSION");
-	lua_pushliteral (L, "LuaLDAP 1.2.2");
+	lua_pushliteral (L, "LuaLDAP 1.1.1");
 	lua_settable (L, -3);
 }
 
 
-/*
-** Create ldap table and register the open method.
-*/
+/** Main symbol exported by lualdap
+ *
+ * 
+ */
 int luaopen_lualdap (lua_State *L) {
+	/* Each entry in this table registers a method callable from Lua */
 	struct luaL_Reg lualdap[] = {
-		{"initialize", lualdap_initialize},
-		{"open_simple", lualdap_open_simple},
+		{"open_simple", lualdap_open_simple},	/* Old synchronous bind using a libldap conneciton handle*/
+		{"init", lualdap_init},			/* */
+		{"get_fd", lualdap_get_fd},
 		{NULL, NULL},
 	};
 
 	lualdap_createmeta (L);
-	luaL_newlib(L, lualdap);
-	lua_pushvalue(L, -1);
-	lua_setglobal(L, LUALDAP_TABLENAME);
+	luaL_openlib (L, LUALDAP_TABLENAME, lualdap, 0);
 	set_info (L);
 
 	return 1;

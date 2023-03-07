@@ -1,31 +1,21 @@
-LuaLDAP
-(https://github.com/bdellegrazie/lualdap/)
+lualdap-nginx (https://github.com/NetworkRADIUS/lualdap-nginx-module)
 
-LuaLDAP is a simple interface from Lua to an LDAP client, in fact it is a bind to
-OpenLDAP or to ADSI. It enables a Lua program to:
+lualdap-nginx is a simple interface from Lua to an LDAP client.  It's designed to
+work with lua-nginx's cosocket API.
 
     * Connect to an LDAP server;
     * Execute any operation (search, add, compare, delete, modify and rename);
     * Retrieve entries and references of the search result.
 
-LuaLDAP is free software and uses the same license as Lua 5.1.
+lualdap-nginx is free software and uses the same license as Lua 5.1.
 
-Current version is 1.2.2. It was developed for both Lua 5.1 and Lua 5.2,
-and both OpenLDAP 2.1 or newer and ADSI.
+Current version is 1.1.0. It was developed for LuaJit 2.1.
 
-Files in the distribution:
-
-    /doc/us/*.html  -- Documentation
-	/src/*			-- Source files
-	/tests/*        -- Test files
-	/vc6/*          -- Build files for MS Visual C 6 (deprecated)
-    /rockspecs/         -- luarocks build system releases
-    Makefile        -- Makefile for Unix systems (deprecated)
-    config          -- Configurations to build on Unix systems (deprecated)
-    Makefile.win    -- Makefile for Windows systens with MS Visual C 8
-    config.win      -- Configurations to build on Windows systems
-    README.md       -- This file
-    CONTRIBUTORS.md -- Who contributed what
-    LICENSE.md      -- MIT License reference
+The original code for this project was taken from LuaLDAP but has been heavily
+modified.
 
 Please see CONTRIBUTORS for contribution information and documentation on original source
+
+Note: This is a work in progress, and whilst it's used heavily within Network RADIUS
+be aware that the code uses lua-nginx's private APIs, and compatibility with a given
+version of NGINX or lua-nginx is not guaranteed.
