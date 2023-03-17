@@ -104,7 +104,8 @@ typedef struct {
 	int        bi;
 } attrs_data;
 
-int luaopen_lualdap (lua_State *L);
+int luaopen_ngx_lualdap (lua_State *L);
+ngx_module_t  ngx_lualdap;
 
 #include "lualdap-ngx.c"
 
@@ -1190,7 +1191,7 @@ static void set_info (lua_State *L) {
  *
  * 
  */
-int luaopen_lualdap (lua_State *L) {
+int luaopen_ngx_lualdap (lua_State *L) {
 	/* Each entry in this table registers a method callable from Lua */
 	struct luaL_Reg lualdap[] = {
 		{"open_simple", lualdap_open_simple},	/* Old synchronous bind using a libldap conneciton handle*/
@@ -1205,3 +1206,18 @@ int luaopen_lualdap (lua_State *L) {
 
 	return 1;
 }
+
+ngx_module_t  ngx_lualdap = {
+	NGX_MODULE_V1,
+	NULL,       /* module context */
+	NULL,          /* module directives */
+	NGX_HTTP_MODULE,                       /* module type */
+	NULL,                                  /* init master */
+	NULL,                                  /* init module */
+	NULL,                                  /* init process */
+	NULL,                                  /* init thread */
+	NULL,                                  /* exit thread */
+	NULL,                                  /* exit process */
+	NULL,                                  /* exit master */
+	NGX_MODULE_V1_PADDING
+};
