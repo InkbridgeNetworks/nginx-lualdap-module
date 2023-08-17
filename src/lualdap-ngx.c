@@ -125,11 +125,11 @@ ldap_operation_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket
 	char *mdn, *msg;
 	ngx_http_lua_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
 	ngx_http_lua_co_ctx_t *coctx = ctx->cur_co_ctx;
-    op_ctx_t *op_ctx = coctx->data;
+	op_ctx_t *op_ctx = coctx->data;
 
 	conn_data *conn = u->peer.connection->data;
 
-    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "entered %s", __FUNCTION__);
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "entered %s", __FUNCTION__);
 
 	if (u->ft_type) {
 		if (u->ft_type & NGX_HTTP_LUA_SOCKET_FT_TIMEOUT) {
@@ -147,26 +147,26 @@ ldap_operation_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket
 		return faildirect(L, ldap_err2string (rc));
 
 	switch (err) {
-		case LDAP_SUCCESS:
-		case LDAP_COMPARE_TRUE:
-			lua_pushboolean (L, 1);
-			break;
-		case LDAP_COMPARE_FALSE:
-			lua_pushboolean (L, 0);
-			break;
-		default:
-			lua_pushnil (L);
-			int nb_strings = 2;
-			lua_pushliteral (L, LUALDAP_PREFIX);
-			if (msg) {
-				lua_pushstring (L, msg);
-				lua_pushliteral (L, " ");
-				nb_strings = 4;
-			}
-			lua_pushstring (L, ldap_err2string(err));
-			lua_concat (L, nb_strings);
-			lua_pushnumber (L, err);
-			ret = 3;
+	case LDAP_SUCCESS:
+	case LDAP_COMPARE_TRUE:
+		lua_pushboolean (L, 1);
+		break;
+	case LDAP_COMPARE_FALSE:
+		lua_pushboolean (L, 0);
+		break;
+	default:
+		lua_pushnil (L);
+		int nb_strings = 2;
+		lua_pushliteral (L, LUALDAP_PREFIX);
+		if (msg) {
+			lua_pushstring (L, msg);
+			lua_pushliteral (L, " ");
+			nb_strings = 4;
+		}
+		lua_pushstring (L, ldap_err2string(err));
+		lua_concat (L, nb_strings);
+		lua_pushnumber (L, err);
+		ret = 3;
 	}
 	ldap_memfree(mdn);
 	ldap_memfree(msg);
@@ -177,15 +177,15 @@ static void update_socket(lua_State *L, conn_data *conn) {
 	ngx_http_lua_socket_tcp_upstream_t *u;
 
 	/* Update internal connection to use new connection from pool */
-    luaL_checktype(L, 2, LUA_TTABLE);
+	luaL_checktype(L, 2, LUA_TTABLE);
 
-    lua_rawgeti(L, 2, 1); /* Push nginx socket onto stack */
-    u = lua_touserdata(L, -1);
-    lua_pop(L, 1);
+	lua_rawgeti(L, 2, 1); /* Push nginx socket onto stack */
+	u = lua_touserdata(L, -1);
+	lua_pop(L, 1);
 
-    if (u == NULL || u->peer.connection == NULL) {
-            return;
-    }
+	if (u == NULL || u->peer.connection == NULL) {
+	    return;
+	}
 
 	/* Update pointers */
 	conn->conn = u->peer;
@@ -247,7 +247,6 @@ ngx_http_lua_socket_prepare_error_retvals(ngx_http_request_t *r,
         lua_pushliteral(L, "client aborted");
 
     } else {
-
         if (u->socket_errno) {
 #if defined(nginx_version) && nginx_version >= 9000
             p = ngx_strerror(u->socket_errno, errstr, sizeof(errstr));
@@ -299,7 +298,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 	conn_data *conn;
 	ngx_http_lua_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
 	ngx_http_lua_co_ctx_t *coctx = ctx->cur_co_ctx;
-    op_ctx_t *op_ctx = coctx->data;
+	op_ctx_t *op_ctx = coctx->data;
     
 	lua_rawgeti (L, LUA_REGISTRYINDEX, search->conn);
 	conn = (conn_data *)lua_touserdata (L, -1); /* get connection */
@@ -317,8 +316,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 
 	// Check status of last call to ldap_result
 	if (op_ctx->ldap_rc == LDAP_RES_SEARCH_RESULT) { /* last message => nil */
-		ldap_parse_result(conn->ld, op_ctx->res, NULL, NULL, NULL, NULL,
-                          &returnedControls, 0);
+		ldap_parse_result(conn->ld, op_ctx->res, NULL, NULL, NULL, NULL, &returnedControls, 0);
 
 		if (search->cookie != NULL) {
 			ber_bvfree(search->cookie);
@@ -339,8 +337,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 		}
 
 		/* Cleanup the controls used. */
-		if (returnedControls)
-			ldap_controls_free(returnedControls);
+		if (returnedControls) ldap_controls_free(returnedControls);
 
 		if (!search->morePages) {
 			/* close search object to avoid reuse */
@@ -351,33 +348,33 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 
 		LDAPMessage *msg = ldap_first_message (conn->ld, op_ctx->res);
 		switch (ldap_msgtype (msg)) {
-			case LDAP_RES_SEARCH_ENTRY: {
-				LDAPMessage *entry = ldap_first_entry (conn->ld, msg);
-				push_dn (L, conn->ld, entry);
-				lua_newtable (L);
-				set_attribs (L, conn->ld, entry, lua_gettop (L));
-				ret = 2; /* two return values */
-				break;
-			}
+		case LDAP_RES_SEARCH_ENTRY: {
+			LDAPMessage *entry = ldap_first_entry (conn->ld, msg);
+			push_dn (L, conn->ld, entry);
+			lua_newtable (L);
+			set_attribs (L, conn->ld, entry, lua_gettop (L));
+			ret = 2; /* two return values */
+			break;
+		}
 /*No reference to LDAP_RES_SEARCH_REFERENCE on MSDN. Maybe there is a replacement to it?*/
 #ifdef LDAP_RES_SEARCH_REFERENCE
-			case LDAP_RES_SEARCH_REFERENCE: {
-				LDAPMessage *ref = ldap_first_reference (conn->ld, msg);
-				push_dn (L, conn->ld, ref); /* is this supposed to work? */
-				lua_pushnil (L);
-				ret = 2; /* two return values */
-				break;
-			}
+		case LDAP_RES_SEARCH_REFERENCE: {
+			LDAPMessage *ref = ldap_first_reference (conn->ld, msg);
+			push_dn (L, conn->ld, ref); /* is this supposed to work? */
+			lua_pushnil (L);
+			ret = 2; /* two return values */
+			break;
+		}
 #endif
-			case LDAP_RES_SEARCH_RESULT:
-				/* close search object to avoid reuse */
-				search_close (L, search);
-				ret = 0;
-				break;
-			default:
-				ldap_msgfree (op_ctx->res);
-				ngx_free(op_ctx);
-				return luaL_error (L, LUALDAP_PREFIX"error on search result chain");
+		case LDAP_RES_SEARCH_RESULT:
+			/* close search object to avoid reuse */
+			search_close (L, search);
+			ret = 0;
+			break;
+		default:
+			ldap_msgfree (op_ctx->res);
+			ngx_free(op_ctx);
+			return luaL_error (L, LUALDAP_PREFIX"error on search result chain");
 		}
 	}
 	ldap_msgfree (op_ctx->res);
@@ -402,7 +399,7 @@ static int ldap_get_next_message_with_ctx(ngx_http_request_t *r, ngx_http_lua_so
 
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "entering ldap_get_next_search_message_with_ctx");
 
-    rc = ldap_result(ldap_conn->ld, op_ctx->msgid, LDAP_MSG_ONE, &timeout, &op_ctx->res);
+	rc = ldap_result(ldap_conn->ld, op_ctx->msgid, LDAP_MSG_ONE, &timeout, &op_ctx->res);
 	if (rc == 0)
 		// No data to be read
 		ret = NGX_AGAIN;
@@ -417,9 +414,9 @@ static int ldap_get_next_message_with_ctx(ngx_http_request_t *r, ngx_http_lua_so
 		} else {
 			op_ctx->ldap_rc = rc;
 
-            /*
-             *  Resumes the current request
-             */
+		       /*
+			*  Resumes the current request
+			*/
 			ngx_http_lua_socket_handle_read_success(r, u);
 			ret = NGX_OK;
 		}
@@ -472,11 +469,11 @@ ngx_http_auth_ldap_sb_ctrl(Sockbuf_IO_Desc *sbiod, int opt, void *arg)
 
 
     switch (opt) {
-        case LBER_SB_OPT_DATA_READY:
-            if (c->conn.connection->read->ready) {
-                return 1;
-            }
-            return 0;
+    case LBER_SB_OPT_DATA_READY:
+	    if (c->conn.connection->read->ready) {
+		return 1;
+	    }
+	    return 0;
     }
 
     return 0;
@@ -569,54 +566,54 @@ static int lualdap_init(lua_State *L) {
 	ngx_http_request_t *r;
 	ngx_http_lua_ctx_t *ctx;
 
-    /* 
-     *  Should not be passed in any arguments init_fd(...) is 
-     *  called on the connection object.
-     *
-     *  This takes an Nginx socket(ngx.socket.tcp) and any bind parameters 
-     *  and creates a actual connection handle.
-     */
+	/* 
+	 *  Should not be passed in any arguments init_fd(...) is 
+	 *  called on the connection object.
+	 *
+	 *  This takes an Nginx socket(ngx.socket.tcp) and any bind parameters 
+	 *  and creates a actual connection handle.
+	 */
 	if (lua_gettop(L) != 0) {
 		return luaL_error(L, "expecting zero arguments, but got %d", lua_gettop(L));
 	}
 
-    /*
-     *  Get the current HTTP request running through NGINX
-     *
-     *  This is just a sanity check.
-     */
+	/*
+	 *  Get the current HTTP request running through NGINX
+	 *
+	 *  This is just a sanity check.
+	 */
 	r = ngx_http_lua_get_req(L);
 	if (r == NULL) {
 		return luaL_error(L, "no request found");
 	}
 
-    /*
-     *  Get a handle to the LUA module running within NGINX
-     *
-     *  This is just a sanity check.
-     */
+	/*
+	 *  Get a handle to the LUA module running within NGINX
+	 *
+	 *  This is just a sanity check.
+	 */
 	ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
 	if (ctx == NULL) return luaL_error(L, "no ctx found");
 
-    /*
-     *  Allocate new connection data in the Lua envirionment
-     *  this holds the LDAP * and the file descriptor.
-     *
-     *  This is pushed onto the Lua stack.
-     */
+	/*
+	 *  Allocate new connection data in the Lua envirionment
+	 *  this holds the LDAP * and the file descriptor.
+	 *
+	 *  This is pushed onto the Lua stack.
+	 */
 	(void)lua_newuserdata(L, sizeof(conn_data)); /* New data pushed onto Lua stack */
 
 	/*
-     *  Associate methods with the connection object.
-     *  The metatable itself is defined in lualdap_createmeta, which 
-     *  is called once when we initialise the library.
-     *
-     *  This metatable makes the following Lua methods available for the handle:
+	 *  Associate methods with the connection object.
+	 *  The metatable itself is defined in lualdap_createmeta, which 
+	 *  is called once when we initialise the library.
+	 *
+	 *  This metatable makes the following Lua methods available for the handle:
 	 *  - init_fd   lualdap_init_fd - Initialise a new libldap handle
-     *              from an existing file descriptor.
-     *              We use this to build a connection around an 
-     *              NGINX stream socket that NGINX has already
-     *              opened.
+	 *              from an existing file descriptor.
+	 *              We use this to build a connection around an 
+	 *              NGINX stream socket that NGINX has already
+	 *              opened.
 	 *  - close     lualdap_close - Close the current connection.
 	 *  - add       lualdap_add - Add a new LDAP object.
 	 *  - compare   lualdap_compare - Compare something? 
@@ -624,7 +621,7 @@ static int lualdap_init(lua_State *L) {
 	 *  - modify    lualdap_modify - Modify an LDAP object.
 	 *  - rename    lualdap_rename - Rename an LDAP object.
 	 *  - search    lualdap_search - Search for an LDAP object.
-     */
+	 */
 	lualdap_setmeta(L, LUALDAP_CONNECTION_METATABLE);
 
 	return 1; /* We pushed one entry onto the stack, our new connection handle */
@@ -634,10 +631,10 @@ static int lualdap_get_fd(lua_State *L) {
 	ngx_http_lua_socket_tcp_upstream_t *u;
 	ngx_http_request_t          *r;
 
-    r = ngx_http_lua_get_req(L);
-    if (r == NULL) {
-        return luaL_error(L, "no request found");
-    }
+	r = ngx_http_lua_get_req(L);
+	if (r == NULL) {
+		return luaL_error(L, "no request found");
+	}
 
 	if (lua_gettop(L) != 1) {
 		return luaL_error(L, "expecting 1 argument, but got %d", lua_gettop(L));
@@ -668,7 +665,7 @@ static int lualdap_get_fd(lua_State *L) {
  * - 5 (bind)       whether we need to rebind the socket.
  *                  we may not need to if we're using a
  *                  a cached connection.
- * - 6 (sasl_mech)  the sasl mechanism to use when binding.
+ * - 6 (sasl_mech)  the sasl mechanism to use when binding - optional.
  */
 static int lualdap_init_fd(lua_State *L) {
 	char *path = NULL;
@@ -679,72 +676,77 @@ static int lualdap_init_fd(lua_State *L) {
 	conn_data *conn = (conn_data *)luaL_checkudata(L, 1, LUALDAP_CONNECTION_METATABLE);
 	op_ctx_t *op_ctx;
 	int msgid;
-	const char *sasl_mech;
-    /*
-     *  Lua arguments 3-5
-     */
-    ldap_pchar_t user;
-    const char *password;
-    int do_bind;
 
-    /*
-     *  If the object this method is being called from does not have
-     *  a metatable of type LUALDAP_CONNECTION_METATABLE, something
-     *  has gone terribly wrong.
-     */
-    if (conn == NULL) {
-        return luaL_error(L, "init_fd called on non-connection object");
-    }
+	/*
+	 *  Lua arguments 3-5
+	 */
+	ldap_pchar_t user;
+	const char *password;
+	int do_bind;
+	/*
+	 *  Optional arg 6
+	 */
+	const char *sasl_mech;
+
+	/*
+	 *  If the object this method is being called from does not have
+	 *  a metatable of type LUALDAP_CONNECTION_METATABLE, something
+	 *  has gone terribly wrong.
+	 */
+	if (conn == NULL) {
+		return luaL_error(L, "init_fd called on non-connection object");
+	}
 
 	r = ngx_http_lua_get_req(L);    /* current NGINX request */
 	if (r == NULL) {
 		return luaL_error(L, "no request found");
 	}
-    /*
-     *  Check we have four additional arguments on the stack
-     */
+	
+	/*
+	 *  Check we have four additional arguments on the stack
+	 */
 	if (lua_gettop(L) != 5) {
 		return luaL_error(L, "expecting 4 arguments, but got %d", lua_gettop(L));
 	}
 
-    ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"Creating new connection from cosocket");
+    	ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"Creating new connection from cosocket");
 
-    /*
-     *  Basic sanity check to make sure this is an NGINX socket
-     *  really we should check the metadata too.
-     */
+	/*
+	 *  Basic sanity check to make sure this is an NGINX socket
+	 *  really we should check the metadata too.
+	 */
 	luaL_checktype(L, 2, LUA_TTABLE);
 
-    /*
-     *  Push nginx socket onto stack
-     */
+	/*
+	 *  Push nginx socket onto stack
+	 */
 	lua_rawgeti(L, 2, 1);
 
-    /*
-     *  Get the ngx_http_lua_socket_tcp_upstream_t from the LUA object.
-     *  This is the C handle that contains all the details of the NGINX 
-     *  stream socket.
-     */
+	/*
+	 *  Get the ngx_http_lua_socket_tcp_upstream_t from the LUA object.
+	 *  This is the C handle that contains all the details of the NGINX 
+	 *  stream socket.
+	 */
 	u = lua_touserdata(L, -1);
 	lua_pop(L, 1);
 
-    /*
-     *  Connection closed? Or is this a logic error??
-     */
+	/*
+	 *  Connection closed? Or is this a logic error??
+	 */
 	if (u == NULL || u->peer.connection == NULL) {
 		return 0;
-    }
+	}
 
-    /*
-     *  u->peer.connection is the underlying socket.
-     *
-     *  ngx_event_t is an event structure with details of the event 
-     *  passed in to the handler function.
-     *
-     *  write->handler gets called on write, read->handler gets called
-     *  on read.  It's not clear why we use a single callback here, 
-     *  but that callback does distinguish between the event types.
-     */
+	/*
+	 *  u->peer.connection is the underlying socket.
+	 *
+	 *  ngx_event_t is an event structure with details of the event 
+	 *  passed in to the handler function.
+	 *
+	 *  write->handler gets called on write, read->handler gets called
+	 *  on read.  It's not clear why we use a single callback here, 
+	 *  but that callback does distinguish between the event types.
+	 */
 	u->peer.connection->write->handler = ldap_socket_handler;
 	u->peer.connection->read->handler = ldap_socket_handler;
 
@@ -763,140 +765,140 @@ static int lualdap_init_fd(lua_State *L) {
     	} else {
         	sasl_mech = LDAP_SASL_SIMPLE;
     	}
-    /*
-     *  Allow us to get back to our connection handle if we're only
-     *  passed ngx_http_lua_socket_tcp_upstream_t.
-     */
+	/*
+	 *  Allow us to get back to our connection handle if we're only
+	 *  passed ngx_http_lua_socket_tcp_upstream_t.
+	 */
 	u->peer.connection->data = conn;
-    conn->u = u;
+	conn->u = u;
 
-    /*
-     *  Initialise an LDAP handle around the FD from the NGINX stream
-     *  socket.
-     *
-     *  LDAP_PROTO_EXT is used to stop allow us to use custom sockbuf
-     *  handlers for the connection so that we can plumb it into the
-     *  NGINX socket.
-     */
-    if (ldap_init_fd(u->peer.connection->fd, LDAP_PROTO_EXT, (const char *) path, &conn->ld) != LDAP_SUCCESS) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX"ldap_init_fd failed");
-        return 0;
-    }
+	/*
+	 *  Initialise an LDAP handle around the FD from the NGINX stream
+	 *  socket.
+	 *
+	 *  LDAP_PROTO_EXT is used to stop allow us to use custom sockbuf
+	 *  handlers for the connection so that we can plumb it into the
+	 *  NGINX socket.
+	 */
+	if (ldap_init_fd(u->peer.connection->fd, LDAP_PROTO_EXT, (const char *) path, &conn->ld) != LDAP_SUCCESS) {
+		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX"ldap_init_fd failed");
+		return 0;
+	}
 
-    /*
-     *  Set the socket option to version 3... It's not clear why this
-     *  is necessary.
-     */
+	/*
+	 *  Set the socket option to version 3... It's not clear why this
+	 *  is necessary.
+	 */
 	conn->version = LDAP_VERSION3;
 	if (ldap_set_option(conn->ld, LDAP_OPT_PROTOCOL_VERSION, &conn->version) != LDAP_OPT_SUCCESS) {
 		return faildirect(L, LUALDAP_PREFIX"Error setting LDAP version");
 	}
 
-    {
-        Sockbuf *sb;
-
-        if (ldap_get_option(conn->ld, LDAP_OPT_SOCKBUF, (void *)&sb) != LDAP_OPT_SUCCESS) {
-            return 0;
-        }
-
-        /*
-         *  Here we reuse the socket bio functions from the NGINX 
-         *  auth_ldap module.  This saves us from writing duplicate
-         *  functions I/O functions.
-         */
-        ber_sockbuf_add_io(sb, &ngx_http_auth_ldap_sbio, LBER_SBIOD_LEVEL_PROVIDER, (void *)conn);
-    }
-
-    /*
-     *  Return 1 to indicate success.
-     */
-	if (!do_bind) {
-		lua_pushinteger(L, 1);
-        return 1;
+	{
+		Sockbuf *sb;
+		
+		if (ldap_get_option(conn->ld, LDAP_OPT_SOCKBUF, (void *)&sb) != LDAP_OPT_SUCCESS) {
+		    return 0;
+		}
+		
+		/*
+		 *  Here we reuse the socket bio functions from the NGINX 
+		 *  auth_ldap module.  This saves us from writing duplicate
+		 *  functions I/O functions.
+		 */
+		ber_sockbuf_add_io(sb, &ngx_http_auth_ldap_sbio, LBER_SBIOD_LEVEL_PROVIDER, (void *)conn);
 	}
 
-    /*
-     *  Add a timer that periodically fires dummy read events
-     *  every second. Not sure why this is done.
-     */
+	/*
+	 *  Return 1 to indicate success.
+	 */
+	if (!do_bind) {
+		lua_pushinteger(L, 1);
+		return 1;
+	}
+
+	/*
+	 *  Add a timer that periodically fires dummy read events
+	 *  every second. Not sure why this is done.
+	 */
 	ngx_add_timer(u->peer.connection->read, 1000);
 
-    /*
-     *  Bind the LDAP handle using credentials...
-     *
-     *  FIXME: We should support SASL binds with the EXTERNAL
-     *  mech here.
-     */
-    {
-        struct berval cred;
-        int rc;
-        
-        memcpy(&cred.bv_val, &password, sizeof(cred.bv_val));
-        cred.bv_len = strlen(password);
+	/*
+	*  Bind the LDAP handle using credentials...
+	*
+	*  FIXME: We should support SASL binds with the EXTERNAL
+	*  mech here.
+	*/
+	{
+		struct berval cred;
+		int rc;
+		
+		memcpy(&cred.bv_val, &password, sizeof(cred.bv_val));
+		cred.bv_len = strlen(password);
+		
+		ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"Binding LDAP connection");
+		rc = ldap_sasl_bind(conn->ld, (const char *) user, sasl_mech, &cred, NULL, NULL, &msgid);
+		if (rc != LDAP_SUCCESS) {
+		    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX"Bind failed immediately");
+		    return faildirect(L, ldap_err2string(rc));
+		}
+	}
 
-        ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"Binding LDAP connection");
-        rc = ldap_sasl_bind(conn->ld, (const char *) user, sasl_mech, &cred, NULL, NULL, &msgid);
-        if (rc != LDAP_SUCCESS) {
-            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX"Bind failed immediately");
-            return faildirect(L, ldap_err2string(rc));
-        }
-    }
+	/*
+	 *  Allocate an op_ctx, this wraps a single LDAP message
+	 *  in a local structure.
+	 */
+	 op_ctx = ngx_alloc(sizeof(op_ctx_t), r->connection->log);
+	 op_ctx->msgid = msgid;
+	 op_ctx->u = u;
+	 op_ctx->conn = conn;
 
-    /*
-     *  Allocate an op_ctx, this wraps a single LDAP message
-     *  in a local structure.
-     */
-	op_ctx = ngx_alloc(sizeof(op_ctx_t), r->connection->log);
-	op_ctx->msgid = msgid;
-	op_ctx->u = u;
-	op_ctx->conn = conn;
-
-    {
-        int rc;
-
-        switch (ldap_get_next_message_with_ctx(r, u, op_ctx)) {
-        case NGX_ERROR:
-        default:
-        	ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"ldap next message read failed: %d", (int) u->ft_type);
-            rc = ngx_http_lua_socket_tcp_receive_retval_handler(r, u, L);
-            dd("tcp receive retval returned: %d", (int) rc);
-            return rc;
-
-        case NGX_OK:
-            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"lua tcp socket receive done in a single run");
-            return ldap_bind_receive_retval_handler(r, u, L);
-
-        case NGX_AGAIN:
-            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"waiting for bind result asynchronously");
-            u->read_event_handler = ldap_search_handler;
-
-            ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
-            coctx = ctx->cur_co_ctx;
-
-            ngx_http_lua_cleanup_pending_operation(coctx);
-
-            dd("setting data to %p, coctx:%p", u, coctx);
-            coctx->cleanup = ngx_http_lua_coctx_cleanup;
-            coctx->data = op_ctx;
-
-            if (ctx->entered_content_phase) {
-                r->write_event_handler = ngx_http_lua_content_wev_handler;
-            } else {
-                r->write_event_handler = ngx_http_core_run_phases;
-            }
-
-            u->read_co_ctx = coctx;
-            u->read_waiting = 1;
-            u->read_prepare_retvals = ldap_bind_receive_retval_handler; /* Resumption function */
-
-            if (u->raw_downstream || u->body_downstream) {
-                ctx->downstream = u;
-            }
-
-        	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "yielding from %s", __FUNCTION__);
-            return lua_yield(L, 0);
-        }
-    }
+	{
+		int rc;
+		
+		switch (ldap_get_next_message_with_ctx(r, u, op_ctx)) {
+		case NGX_ERROR:
+		default:
+			ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"ldap next message read failed: %d", (int) u->ft_type);
+			rc = ngx_http_lua_socket_tcp_receive_retval_handler(r, u, L);
+		    	dd("tcp receive retval returned: %d", (int) rc);
+		    	return rc;
+		
+		case NGX_OK:
+			ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"lua tcp socket receive done in a single run");
+			return ldap_bind_receive_retval_handler(r, u, L);
+		
+		case NGX_AGAIN:
+			ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"waiting for bind result asynchronously");
+			u->read_event_handler = ldap_search_handler;
+			
+			ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
+			coctx = ctx->cur_co_ctx;
+			
+			ngx_http_lua_cleanup_pending_operation(coctx);
+			
+			dd("setting data to %p, coctx:%p", u, coctx);
+			coctx->cleanup = ngx_http_lua_coctx_cleanup;
+			coctx->data = op_ctx;
+			
+			if (ctx->entered_content_phase) {
+				r->write_event_handler = ngx_http_lua_content_wev_handler;
+			} else {
+				r->write_event_handler = ngx_http_core_run_phases;
+			}
+			
+			u->read_co_ctx = coctx;
+			u->read_waiting = 1;
+			u->read_prepare_retvals = ldap_bind_receive_retval_handler; /* Resumption function */
+			
+			if (u->raw_downstream || u->body_downstream) {
+				ctx->downstream = u;
+			}
+			
+			ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "yielding from %s", __FUNCTION__);
+			return lua_yield(L, 0);
+		}
+	}
 }
 
 
@@ -929,8 +931,8 @@ ldap_socket_handler(ngx_event_t *ev)
         u->write_event_handler(r, u);
 
     } else {
-	    /* Since we've got a read event mark write as successful */
-	    ngx_http_lua_socket_handle_write_success(r,u);
+	/* Since we've got a read event mark write as successful */
+	ngx_http_lua_socket_handle_write_success(r,u);
 
         u->read_event_handler(r, u);
     }
@@ -1122,34 +1124,34 @@ ldap_bind_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tcp_
 	int n;
 	ngx_http_lua_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
 	ngx_http_lua_co_ctx_t *coctx = ctx->cur_co_ctx;
-    op_ctx_t *op_ctx = coctx->data;
+	op_ctx_t *op_ctx = coctx->data;
 	conn_data *ldap_conn = op_ctx->conn;
 
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, LUALDAP_PREFIX"received bind result");
+	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, LUALDAP_PREFIX"received bind result");
 
 	r = ngx_http_lua_get_req(L);
 	if (r == NULL) {
 		return luaL_error(L, "no request found");
 	}
 
-    if (u->ft_type) {
-        if (u->ft_type & NGX_HTTP_LUA_SOCKET_FT_TIMEOUT) {
-            u->no_close = 1;
-        }
-
-        n = ngx_http_lua_socket_read_error_retval_handler(r, u, L);
-        lua_pushliteral(L, "");
-        ngx_free(op_ctx);
-
-        return n + 1;
-    }
+	if (u->ft_type) {
+		if (u->ft_type & NGX_HTTP_LUA_SOCKET_FT_TIMEOUT) {
+		    u->no_close = 1;
+		}
+		
+		n = ngx_http_lua_socket_read_error_retval_handler(r, u, L);
+		lua_pushliteral(L, "");
+		ngx_free(op_ctx);
+		
+		return n + 1;
+	}
 
 	if (ldap_conn->ld == NULL) {
 		ngx_http_auth_ldap_close_connection(ldap_conn, r->connection->log);
 		return luaL_error(L, "ldap_bind_receive_retval_handler: no LDAP connection");
 	}
 
-    ldap_msgfree(op_ctx->res);
+    	ldap_msgfree(op_ctx->res);
 	ngx_free(op_ctx);
 
 	lua_pushinteger(L, 1);
