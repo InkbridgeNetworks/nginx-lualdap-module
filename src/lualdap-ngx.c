@@ -668,9 +668,10 @@ static int lualdap_get_fd(lua_State *L) {
  * - 5 (bind)       whether we need to rebind the socket.
  *                  we may not need to if we're using a
  *                  a cached connection.
+ * - 6 (sasl_mech)  the sasl mechanism to use when binding.
  */
 static int lualdap_init_fd(lua_State *L) {
-    char *path = NULL;
+	char *path = NULL;
 	ngx_http_lua_socket_tcp_upstream_t *u;
 	ngx_http_request_t *r;
 	ngx_http_lua_ctx_t *ctx;
@@ -678,7 +679,7 @@ static int lualdap_init_fd(lua_State *L) {
 	conn_data *conn = (conn_data *)luaL_checkudata(L, 1, LUALDAP_CONNECTION_METATABLE);
 	op_ctx_t *op_ctx;
 	int msgid;
-
+	const char *sasl_mech;
     /*
      *  Lua arguments 3-5
      */
@@ -744,7 +745,7 @@ static int lualdap_init_fd(lua_State *L) {
      *  on read.  It's not clear why we use a single callback here, 
      *  but that callback does distinguish between the event types.
      */
-    u->peer.connection->write->handler = ldap_socket_handler;
+	u->peer.connection->write->handler = ldap_socket_handler;
 	u->peer.connection->read->handler = ldap_socket_handler;
 
 	user = (ldap_pchar_t) luaL_optstring (L, 3, NULL);
@@ -754,6 +755,14 @@ static int lualdap_init_fd(lua_State *L) {
 
 	conn->conn = u->peer;
 
+    	/*
+     	 *  Check for optional arguments
+     	 */
+    	if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+        	sasl_mech = luaL_checkstring(L, 1);
+    	} else {
+        	sasl_mech = LDAP_SASL_SIMPLE;
+    	}
     /*
      *  Allow us to get back to our connection handle if we're only
      *  passed ngx_http_lua_socket_tcp_upstream_t.
@@ -826,7 +835,7 @@ static int lualdap_init_fd(lua_State *L) {
         cred.bv_len = strlen(password);
 
         ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"Binding LDAP connection");
-        rc = ldap_sasl_bind(conn->ld, (const char *) user, LDAP_SASL_SIMPLE, &cred, NULL, NULL, &msgid);
+        rc = ldap_sasl_bind(conn->ld, (const char *) user, sasl_mech, &cred, NULL, NULL, &msgid);
         if (rc != LDAP_SUCCESS) {
             ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX"Bind failed immediately");
             return faildirect(L, ldap_err2string(rc));
