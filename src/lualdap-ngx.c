@@ -705,7 +705,7 @@ static int lualdap_init_fd(lua_State *L) {
 	/*
 	 *  Check we have four additional arguments on the stack
 	 */
-	if (lua_gettop(L) >= 5) {
+	if (lua_gettop(L) < 5) {
 		return luaL_error(L, "expecting >= 5 arguments, but got %d", lua_gettop(L));
 	}
 
