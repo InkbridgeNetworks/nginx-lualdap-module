@@ -753,18 +753,17 @@ static int lualdap_init_fd(lua_State *L) {
 	user = (ldap_pchar_t) luaL_optstring (L, 3, NULL);
 	password = luaL_optstring (L, 4, NULL);
 	do_bind = lua_toboolean (L, 5);
-	lua_pop(L, 5);  /* Clear the stack */
-
 	conn->conn = u->peer;
 
     	/*
      	 *  Check for optional arguments
      	 */
-    	if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
-        	sasl_mech = luaL_checkstring(L, 1);
-		lua_pop(L, 1);  /* Clear the optional arg too */
+    	if (lua_gettop(L) >= 6 && !lua_isnil(L, 6)) {
+        	sasl_mech = luaL_checkstring(L, 6);
+		lua_pop(L, 6);  /* Clear the optional arg too */
     	} else {
         	sasl_mech = LDAP_SASL_SIMPLE;
+		lua_pop(L, 5);
     	}
 	/*
 	 *  Allow us to get back to our connection handle if we're only
