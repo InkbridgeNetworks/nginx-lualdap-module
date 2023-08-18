@@ -705,8 +705,8 @@ static int lualdap_init_fd(lua_State *L) {
 	/*
 	 *  Check we have four additional arguments on the stack
 	 */
-	if (lua_gettop(L) != 5) {
-		return luaL_error(L, "expecting 4 arguments, but got %d", lua_gettop(L));
+	if (lua_gettop(L) >= 5) {
+		return luaL_error(L, "expecting >= 5 arguments, but got %d", lua_gettop(L));
 	}
 
     	ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"Creating new connection from cosocket");
