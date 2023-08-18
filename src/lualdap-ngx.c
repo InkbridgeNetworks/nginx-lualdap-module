@@ -762,6 +762,7 @@ static int lualdap_init_fd(lua_State *L) {
      	 */
     	if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
         	sasl_mech = luaL_checkstring(L, 1);
+		lua_pop(L, 1);  /* Clear the optional arg too */
     	} else {
         	sasl_mech = LDAP_SASL_SIMPLE;
     	}
