@@ -7,9 +7,9 @@ ngx_lua_dir=$(echo "$HTTP_LUA_DEPS" | grep -oE 'ngx_lua-[^/]+' | head -1)
 
 # Lua is picked up from the symbol space the module is loaded into
 # Symas paths are for (in order)
-- commercially supported OpenLDAP
-- OpenLDAP LTB
-- Homebrew
+# - commercially supported OpenLDAP
+# - OpenLDAP LTB
+# - Homebrew
 ngx_module_libs="-L/opt/symas/lib -L /usr/local/openldap/lib64 -L/usr/local/opt/openldap/lib -lldap -llber"
 ngx_module_incs="/opt/symas/include /usr/local/openldap/include /usr/local/opt/openldap/include ../${ngx_lua_dir}/src"
 
