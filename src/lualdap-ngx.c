@@ -23,7 +23,7 @@ static void ngx_http_lua_socket_handle_write_success(ngx_http_request_t *r, ngx_
 static void ngx_http_lua_socket_handle_read_success(ngx_http_request_t *r, ngx_http_lua_socket_tcp_upstream_t *u);
 static void ngx_http_lua_socket_handle_write_success(ngx_http_request_t *r, ngx_http_lua_socket_tcp_upstream_t *u);
 static void ngx_http_lua_coctx_cleanup(void *data);
-void ngx_http_lua_content_wev_handler(ngx_http_request_t *r);
+static void ngx_http_lua_content_wev_handler(ngx_http_request_t *r);
 static int ngx_http_lua_socket_tcp_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tcp_upstream_t *u, lua_State *L);
 static void ldap_socket_handler(ngx_event_t *ev);
 static int ldap_get_next_message (ngx_http_request_t *r, ngx_http_lua_socket_tcp_upstream_t *u);
@@ -536,7 +536,7 @@ ngx_http_lua_coctx_cleanup(void *data)
 //    ngx_http_lua_socket_tcp_finalize(u->request, u);
 }
 
-void
+static void
 ngx_http_lua_content_wev_handler(ngx_http_request_t *r)
 {
     ngx_http_lua_ctx_t          *ctx;
