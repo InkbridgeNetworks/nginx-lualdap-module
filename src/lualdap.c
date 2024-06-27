@@ -1207,10 +1207,28 @@ int luaopen_ngx_lualdap (lua_State *L) {
 	return 1;
 }
 
+/*
+ *  Module takes no configuration, but we must provide a ctx else
+ *  nginx segvs on config test.
+ */
+static ngx_http_module_t  ngx_lualdap_module_ctx = {
+	NULL,                                  /* preconfiguration */
+	NULL,                                  /* postconfiguration */
+
+	NULL,                                  /* create main configuration */
+	NULL,                                  /* init main configuration */
+
+	NULL,                                  /* create server configuration */
+	NULL,                                  /* merge server configuration */
+
+	NULL,                                  /* create location configuration */
+	NULL                                   /* merge location configuration */
+};
+
 ngx_module_t  ngx_lualdap = {
 	NGX_MODULE_V1,
-	NULL,       /* module context */
-	NULL,          /* module directives */
+	&ngx_lualdap_module_ctx,               /* module context */
+	NULL,                                  /* module directives */
 	NGX_HTTP_MODULE,                       /* module type */
 	NULL,                                  /* init master */
 	NULL,                                  /* init module */
