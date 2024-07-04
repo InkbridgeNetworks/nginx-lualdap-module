@@ -347,7 +347,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 	} else {
 		LDAPMessage *msg = ldap_first_message (conn->ld, op_ctx->res);
 		int msgtype = ldap_msgtype(msg)
-		switch (msgtype)) {
+		switch (msgtype) {
 		case LDAP_RES_SEARCH_ENTRY: {
 			LDAPMessage *entry = ldap_first_entry (conn->ld, msg);
 			push_dn (L, conn->ld, entry);
@@ -375,7 +375,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			ldap_msgfree(op_ctx->res);
 			op_ctx->res = NULL; /* For debugging */
 			ngx_free(op_ctx);
-			return luaL_error(L, LUALDAP_PREFIX"error on search result chain, unexpected msgtype (%d), msgtype);
+			return luaL_error(L, LUALDAP_PREFIX"error on search result chain, unexpected msgtype (%d)", msgtype);
 		}
 	}
 	ldap_msgfree(op_ctx->res);

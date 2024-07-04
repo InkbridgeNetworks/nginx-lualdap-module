@@ -25,64 +25,7 @@ jobs:
         --with-http_stub_status_module \
         --with-http_auth_request_module \
         --add-dynamic-module=${{ github.workspace }}/submodules/nginx-lualdap-module
-      #
-      #  ldap.conf only allows us to set a few parameters
-      #  These environmental variable can be referenced with ${{ env.<util> }}
-      #  to avoid needing to pass additional arguments on each call.
-      #
-      ldapsearch: ldapsearch -o ldif-wrap=no -v -D 'cn=manager,dc=example,dc=org' -w 'password'
-      ldapsearch_config: ldapsearch -o ldif-wrap=no -v -D 'cn=manager,cn=config' -w 'password' -b 'cn=config'
-      ldapadd: ldapadd -v -D 'cn=manager,dc=example,dc=org' -w 'password'
-      ldapadd_config: ldapadd -v -D 'cn=manager,cn=config' -w 'password'
-      ldapmodify: ldapmodify -v -D 'cn=manager,dc=example,dc=org' -w 'password'
-      ldapdelete: ldapdelete -v -D 'cn=manager,dc=example,dc=org' -w 'password'
-    services:
-      openldap:
-        image: bitnami/openldap:latest
-        ports:
-          - 389:389
-        env:
-          LDAP_PORT_NUMBER: 389
-          LDAP_ROOT: dc=example,dc=org
-          LDAP_ADMIN_USERNAME: manager
-          LDAP_ADMIN_PASSWORD: password
-          LDAP_CONFIG_ADMIN_ENABLED: yes
-          LDAP_CONFIG_ADMIN_USERNAME: manager
-          LDAP_CONFIG_ADMIN_PASSWORD: password
-          LDAP_USERS: api
-          LDAP_PASSWORDS: apipass
-          BITNAMI_DEBUG: true
     steps:
-      #
-      #  Because why the heck is this enabled by default for a
-      #  CI run.  This will likely cause any non-standard deployments
-      #  fail.
-      #
-      - name: Disable AppArmor
-        run: sudo systemctl disable apparmor
-
-      - name: OpenLDAP - Install utils
-        run: |
-          sudo apt-get install -y --no-install-recommends ldap-utils
-      #
-      #  Specify basic parameters for ldap(search|add|modify|delete)
-      #
-      - name: OpenLDAP - Populate ldap.conf
-        run: |
-          sudo chmod -R 666 /etc/ldap/ldap.conf
-          cat > /etc/ldap/ldap.conf <<EOF
-            URI ldap://127.0.0.1:389
-            BASE dc=example,dc=org
-            DEREF always
-            REFERRALS on
-            SIZELIMIT 0
-            TIMELIMIT 5
-          EOF
-          cat /etc/ldap/ldap.conf
-
-      - name: OpenLDAP - Verify service is responding
-        run: ${{ env.ldapsearch }}
-
       #
       #  Recursively checkout the LUA code and all the submodules
       #
@@ -93,23 +36,6 @@ jobs:
           submodules: recursive
           # Needed for submodule refs which aren't pointing to the head commit
           fetch-depth: 100
-
-      #
-      #  Add the Lua API schemas, the FreeRADIUS schemas and the Network RADIUS
-      #  schemas.  These aren't technically all required, but it helps us
-      #  test with multiple protocols
-      #
-      - name: OpenLDAP - Add aditional schemas
-        run: |
-          for schema in submodules/freeradius-server/doc/schemas/ldap/openldap/*.ldif; do
-              ${{ env.ldapadd_config }} -f "${schema}"
-          done
-          for schema in share/openldap/schema/*.ldif; do
-              ${{ env.ldapadd_config }} -f "${schema}"
-          done
-
-      - name: OpenLDAP - Add base structure
-        run: ${{ env.ldapadd }} -c -f "share/openldap/base/init.ldif"
 
       - name: NGINX - Generate cache key hash
         run: echo "CACHE_KEY=$(echo "${{ runner.os }}-$(git ls-tree HEAD ./submodules/nginx-lualdap-module)-${{ vars.OPENRESTY_VERSION }}-${{ env.nginx_config_args }}" | sha256sum | cut -d ' ' -f1)" >> $GITHUB_ENV
@@ -155,8 +81,7 @@ jobs:
           wget ${{ vars.OPENRESTY_BASE_URL }}/openresty-${{ vars.OPENRESTY_VERSION }}.tar.gz
           tar -xzf openresty-${{ vars.OPENRESTY_VERSION }}.tar.gz
 
-      - name: NGINX - Configure (if not cached)
-        if: steps.nginx-build-restore.outputs.cache-hit != 'true'
+      - name: NGINX - Configure
         working-directory: openresty-${{ vars.OPENRESTY_VERSION }}
         run: |
           ./configure ${{ env.nginx_config_args }}
