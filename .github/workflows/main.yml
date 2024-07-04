@@ -6,7 +6,7 @@ concurrency:
 jobs:
   ci:
     timeout-minutes: 60
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
     env:
@@ -29,7 +29,7 @@ jobs:
       openresty_version: 1.21.4.3
     steps:
       - name: Install git-lfs
-        run: apt-get install git-lfs
+        run: sudo apt-get install git-lfs
 
       - name: Checkout
         uses: actions/checkout@v4
