@@ -6,7 +6,7 @@ concurrency:
 jobs:
   ci:
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       fail-fast: false
     env:
@@ -25,6 +25,8 @@ jobs:
         --with-http_stub_status_module \
         --with-http_auth_request_module \
         --add-dynamic-module=${{ github.workspace }}/submodules/nginx-lualdap-module
+      openresty_base_url: https://openresty.org/download
+      openresty_version: 1.21.4.3
     steps:
       #
       #  Recursively checkout the LUA code and all the submodules
@@ -78,20 +80,20 @@ jobs:
       - name: NGINX - Download (if not cached)
         if: steps.nginx-build-restore.outputs.cache-hit != 'true'
         run: |
-          wget ${{ vars.OPENRESTY_BASE_URL }}/openresty-${{ vars.OPENRESTY_VERSION }}.tar.gz
-          tar -xzf openresty-${{ vars.OPENRESTY_VERSION }}.tar.gz
+          wget ${{ env.openresty_base_url }}/openresty-${{ vars.OPENRESTY_VERSION }}.tar.gz
+          tar -xzf openresty-${{ env.openresty_version }}.tar.gz
 
       - name: NGINX - Configure
-        working-directory: openresty-${{ vars.OPENRESTY_VERSION }}
+        working-directory: openresty-${{ env.openresty_version }}
         run: |
           ./configure ${{ env.nginx_config_args }}
 
       - name: NGINX - Build
-        working-directory: openresty-${{ vars.OPENRESTY_VERSION }}
+        working-directory: openresty-${{ env.openresty_version }}
         run: make
 
       - name: NGINX - Install
-        working-directory: openresty-${{ vars.OPENRESTY_VERSION }}
+        working-directory: openresty-${{ env.openresty_version }}
         run: sudo make install
 
       # Cache the last build state.  This should mean that make only rebuilds
@@ -103,7 +105,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            ${{ github.workspace }}/openresty-${{ vars.OPENRESTY_VERSION }}
+            ${{ github.workspace }}/openresty-${{ env.openresty_version  }}
           key: ${{ env.CACHE_KEY }}
 
       - name: On Failure - Dump OpenLDAP data
