@@ -6,7 +6,16 @@ concurrency:
 jobs:
   ci:
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    container:
+      image: docker.internal.networkradius.com/self-hosted
+      #  "privileged" is needed for Samba install
+      #  "memory-swap -1" enables full use of host swap and may help
+      #    with containers randomly quitting with "The operation was
+      #    canceled"
+      options: >-
+        --privileged
+        --memory-swap -1
     strategy:
       fail-fast: false
     env:
@@ -24,10 +33,13 @@ jobs:
         --with-pcre-jit \
         --with-http_stub_status_module \
         --with-http_auth_request_module \
-        --add-dynamic-module=${{ github.workspace }}/submodules/nginx-lualdap-module
+        --add-dynamic-module=../
       openresty_base_url: https://openresty.org/download
       openresty_version: 1.21.4.3
     steps:
+      - name: Install sudo (optional)
+        run: apt-get install sudo
+ 
       - name: Install git-lfs
         run: sudo apt-get install git-lfs
 
@@ -40,7 +52,7 @@ jobs:
           fetch-depth: 100
 
       - name: NGINX - Generate cache key hash
-        run: echo "CACHE_KEY=$(echo "${{ runner.os }}-$(git ls-tree HEAD ./submodules/nginx-lualdap-module)-${{ vars.OPENRESTY_VERSION }}-${{ env.nginx_config_args }}" | sha256sum | cut -d ' ' -f1)" >> $GITHUB_ENV
+        run: echo "CACHE_KEY=$(echo "${{ runner.os }}-${{ env.openresty_version }}-${{ env.nginx_config_args }}" | sha256sum | cut -d ' ' -f1)" >> $GITHUB_ENV
 
       - name: NGINX - Install basic dependencies
         run: |
@@ -80,7 +92,7 @@ jobs:
       - name: NGINX - Download (if not cached)
         if: steps.nginx-build-restore.outputs.cache-hit != 'true'
         run: |
-          wget ${{ env.openresty_base_url }}/openresty-${{ vars.OPENRESTY_VERSION }}.tar.gz
+          wget ${{ env.openresty_base_url }}/openresty-${{ env.openresty_version }}.tar.gz
           tar -xzf openresty-${{ env.openresty_version }}.tar.gz
 
       - name: NGINX - Configure
@@ -88,9 +100,13 @@ jobs:
         run: |
           ./configure ${{ env.nginx_config_args }}
 
+      - name: Get number of CPU cores
+        uses: SimenB/github-actions-cpu-cores@v2
+        id: cpu-cores
+
       - name: NGINX - Build
         working-directory: openresty-${{ env.openresty_version }}
-        run: make
+        run: make -j ${{ steps.cpu-cores.outputs.count }}
 
       - name: NGINX - Install
         working-directory: openresty-${{ env.openresty_version }}
