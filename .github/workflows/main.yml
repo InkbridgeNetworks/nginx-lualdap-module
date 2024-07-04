@@ -98,6 +98,7 @@ jobs:
       - name: NGINX - Configure
         working-directory: openresty-${{ env.openresty_version }}
         run: |
+          if: steps.nginx-build-restore.outputs.cache-hit != 'true'
           ./configure ${{ env.nginx_config_args }}
 
       - name: Get number of CPU cores
@@ -106,7 +107,7 @@ jobs:
 
       - name: NGINX - Build
         working-directory: openresty-${{ env.openresty_version }}
-        run: make -j ${{ steps.cpu-cores.outputs.count }}
+        run: make clean && make -j ${{ steps.cpu-cores.outputs.count }}
 
       - name: NGINX - Install
         working-directory: openresty-${{ env.openresty_version }}

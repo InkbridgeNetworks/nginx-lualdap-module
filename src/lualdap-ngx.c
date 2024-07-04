@@ -346,7 +346,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 		ret = 0;
 	} else {
 		LDAPMessage *msg = ldap_first_message (conn->ld, op_ctx->res);
-		int msgtype = ldap_msgtype(msg)
+		int msgtype = ldap_msgtype(msg);
 		switch (msgtype) {
 		case LDAP_RES_SEARCH_ENTRY: {
 			LDAPMessage *entry = ldap_first_entry (conn->ld, msg);
