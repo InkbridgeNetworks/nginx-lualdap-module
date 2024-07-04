@@ -74,7 +74,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${{ github.workspace }}/openresty-${{ vars.OPENRESTY_VERSION }}
+            ${{ github.workspace }}/openresty-${{ env.openresty_version }}
           key: ${{ env.CACHE_KEY }}
 
       - name: NGINX - Download (if not cached)
