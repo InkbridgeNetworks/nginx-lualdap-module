@@ -28,9 +28,9 @@ jobs:
       openresty_base_url: https://openresty.org/download
       openresty_version: 1.21.4.3
     steps:
-      #
-      #  Recursively checkout the LUA code and all the submodules
-      #
+      - name: Install git-lfs
+        run: sudo apt-get install git-lfs
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
