@@ -345,9 +345,9 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 		}
 		ret = 0;
 	} else {
-
 		LDAPMessage *msg = ldap_first_message (conn->ld, op_ctx->res);
-		switch (ldap_msgtype (msg)) {
+		int msgtype = ldap_msgtype(msg)
+		switch (msgtype)) {
 		case LDAP_RES_SEARCH_ENTRY: {
 			LDAPMessage *entry = ldap_first_entry (conn->ld, msg);
 			push_dn (L, conn->ld, entry);
@@ -372,12 +372,14 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			ret = 0;
 			break;
 		default:
-			ldap_msgfree (op_ctx->res);
+			ldap_msgfree(op_ctx->res);
+			op_ctx->res = NULL; /* For debugging */
 			ngx_free(op_ctx);
-			return luaL_error (L, LUALDAP_PREFIX"error on search result chain");
+			return luaL_error(L, LUALDAP_PREFIX"error on search result chain, unexpected msgtype (%d), msgtype);
 		}
 	}
-	ldap_msgfree (op_ctx->res);
+	ldap_msgfree(op_ctx->res);
+	op_ctx->res = NULL; /* For debugging */
 	ngx_free(op_ctx);
 	return ret;
 }
@@ -848,7 +850,7 @@ static int lualdap_init_fd(lua_State *L) {
 	 *  Allocate an op_ctx, this wraps a single LDAP message
 	 *  in a local structure.
 	 */
-	 op_ctx = ngx_alloc(sizeof(op_ctx_t), r->connection->log);
+	 op_ctx = ngx_calloc(sizeof(op_ctx_t), r->connection->log);
 	 op_ctx->msgid = msgid;
 	 op_ctx->u = u;
 	 op_ctx->conn = conn;
@@ -1152,6 +1154,7 @@ ldap_bind_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tcp_
 	}
 
     	ldap_msgfree(op_ctx->res);
+	op_ctx->res = NULL;	/* For debugging */
 	ngx_free(op_ctx);
 
 	lua_pushinteger(L, 1);
