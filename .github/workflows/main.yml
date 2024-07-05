@@ -19,6 +19,7 @@ jobs:
     strategy:
       fail-fast: false
     env:
+      apt-install: sudo apt-get install -y --no-install-recommends
       nginx_config_args: |
         --prefix=/usr/local/openresty \
         --conf-path=/etc/nginx/nginx.conf \
@@ -37,12 +38,6 @@ jobs:
       openresty_base_url: https://openresty.org/download
       openresty_version: 1.21.4.3
     steps:
-      - name: Install sudo (optional)
-        run: apt-get install sudo
- 
-      - name: Install git-lfs
-        run: sudo apt-get install git-lfs
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -58,7 +53,7 @@ jobs:
         run: |
           sudo apt-get update
           # Standard build dependencies
-          sudo apt-get install -y --no-install-recommends \
+          ${{ env.apt-install }} \
             build-essential \
             devscripts \
             equivs \
@@ -68,7 +63,7 @@ jobs:
             lldb \
             strace
           # NGINX specific build dependencies
-          sudo apt-get install -y --no-install-recommends \
+          ${{ env.apt-install }} \
             perl \
             libpcre3-dev \
             libssl-dev \
@@ -105,8 +100,8 @@ jobs:
       # files where the openresty version changes, the configure args change
       # or the lua ldap submodule commit changes.
       - name: NGINX - Cache build state
-        id: nginx-build-store
         if: steps.nginx-build-restore.outputs.cache-hit != 'true'
+        id: nginx-build-store
         uses: actions/cache/save@v4
         with:
           path: |
@@ -123,19 +118,7 @@ jobs:
 
       - name: NGINX - Install
         working-directory: openresty-${{ env.openresty_version }}
-        run: sudo make install
-
-      - name: On Failure - Dump OpenLDAP data
-        run: ${{ env.ldapsearch }}
-        if: ${{ failure() }}
-
-      - name: On Failure - Dump OpenLDAP configuration
-        run: ${{ env.ldapsearch_config }}
-        if: ${{ failure() }}
-
-      - name: On Failure - Display startup logs
-        run: docker logs "${{ job.services.openldap.id }}"
-        if: ${{ failure() }}
+        run: sudo make install -j ${{ steps.cpu-cores.outputs.count }}
 
       - name: "On Failure - Start tmate"
         uses: mxschmitt/action-tmate@v3
