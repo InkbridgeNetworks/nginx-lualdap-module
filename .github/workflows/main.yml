@@ -94,7 +94,7 @@ jobs:
         if: steps.nginx-build-restore.outputs.cache-hit != 'true'
         working-directory: openresty-${{ env.openresty_version }}
         run: |
-          ./configure ${{ env.nginx_config_args }}
+          MAKEFLAGS="-j ${{ steps.cpu-cores.outputs.count }}" ./configure ${{ env.nginx_config_args }}
 
       # Cache the last build state.  This should mean that make only rebuilds
       # files where the openresty version changes, the configure args change
