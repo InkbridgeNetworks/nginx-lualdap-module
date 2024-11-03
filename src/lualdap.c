@@ -27,6 +27,8 @@
 #include "compat-5.1.h"
 #endif
 
+/* Included to fix incomplete definition error in NGINX headers */
+#include <in6.h>
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
