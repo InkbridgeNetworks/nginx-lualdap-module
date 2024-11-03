@@ -4,6 +4,13 @@
 ** $Id: lualdap.c,v 1.48 2007/12/14 15:11:22 carregal Exp $
 */
 
+#include <ngx_config.h>
+#include <ngx_core.h>
+#include <ngx_http.h>
+#include <ngx_http_lua_socket_tcp.h>
+#include <ngx_http_lua_util.h>
+#include <ngx_http_lua_uthread.h>
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -27,18 +34,7 @@
 #include "compat-5.1.h"
 #endif
 
-/* Included to fix incomplete definition error in NGINX headers */
-#include <netinet/in.h>
-#include <netinet/ip6.h>
-#include <sys/socket.h>
-
-#include <ngx_config.h>
-#include <ngx_core.h>
-#include <ngx_http.h>
-#include <ngx_http_lua_socket_tcp.h>
 #include <ddebug.h>
-#include <ngx_http_lua_util.h>
-#include <ngx_http_lua_uthread.h>
 
 #ifdef WINLDAPAPI
 #define timeval l_timeval
