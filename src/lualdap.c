@@ -29,6 +29,9 @@
 
 /* Included to fix incomplete definition error in NGINX headers */
 #include <netinet/in.h>
+#include <netinet/ip6.h>
+#include <sys/socket.h>
+
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
