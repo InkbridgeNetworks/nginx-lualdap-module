@@ -36,7 +36,7 @@ jobs:
         --with-http_auth_request_module \
         --add-dynamic-module=../
       openresty_base_url: https://openresty.org/download
-      openresty_version: 1.21.4.3
+      openresty_version: 1.27.1.1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
