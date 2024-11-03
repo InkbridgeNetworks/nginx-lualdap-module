@@ -72,6 +72,10 @@ jobs:
             libldap-dev \
             zlib1g-dev
 
+      - name: Get number of CPU cores
+        uses: SimenB/github-actions-cpu-cores@v2
+        id: cpu-cores
+        
       #
       #  Build and install openresty with out custom Async
       #  lua LDAP connector.
@@ -107,10 +111,6 @@ jobs:
           path: |
             ${{ github.workspace }}/openresty-${{ env.openresty_version  }}
           key: ${{ env.CACHE_KEY }}
-
-      - name: Get number of CPU cores
-        uses: SimenB/github-actions-cpu-cores@v2
-        id: cpu-cores
 
       - name: NGINX - Build
         working-directory: openresty-${{ env.openresty_version }}
