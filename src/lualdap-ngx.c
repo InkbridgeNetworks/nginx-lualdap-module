@@ -50,13 +50,13 @@ int dump(void *myStruct, long size)
     unsigned int i;
     const unsigned char * const px = (unsigned char*)myStruct;
     for (i = 0; i < size; ++i) {
-        if( i % (sizeof(int) * 8) == 0){
-            printf("\n%08X ", i);
-        }
-        else if( i % 4 == 0){
-            printf(" ");
-        }
-        printf("%02X", px[i]);
+	if( i % (sizeof(int) * 8) == 0){
+	    printf("\n%08X ", i);
+	}
+	else if( i % 4 == 0){
+	    printf(" ");
+	}
+	printf("%02X", px[i]);
     }
 
     printf("\n\n");
@@ -67,30 +67,30 @@ void stackdump_g(lua_State* l)
 {
     int i;
     int top = lua_gettop(l);
- 
+
     printf("total in stack %d\n",top);
- 
+
     for (i = 1; i <= top; i++)
     {  /* repeat for each level */
-        printf("  ");  /* put a separator */
-        int t = lua_type(l, i);
-        switch (t) {
-            case LUA_TSTRING:  /* strings */
-                printf("string: '%s'\n", lua_tostring(l, i));
-                break;
-            case LUA_TBOOLEAN:  /* booleans */
-                printf("boolean %s\n",lua_toboolean(l, i) ? "true" : "false");
-                break;
-            case LUA_TNUMBER:  /* numbers */
-                printf("number: %g\n", lua_tonumber(l, i));
-                break;
+	printf("  ");  /* put a separator */
+	int t = lua_type(l, i);
+	switch (t) {
+	    case LUA_TSTRING:  /* strings */
+		printf("string: '%s'\n", lua_tostring(l, i));
+		break;
+	    case LUA_TBOOLEAN:  /* booleans */
+		printf("boolean %s\n",lua_toboolean(l, i) ? "true" : "false");
+		break;
+	    case LUA_TNUMBER:  /* numbers */
+		printf("number: %g\n", lua_tonumber(l, i));
+		break;
 	    case LUA_TUSERDATA:
 		printf("Userdata: %x\n", lua_touserdata(l,i));
 		break;
-            default:  /* other values */
-                printf("%s %s\n", lua_typename(l, t), lua_tostring(l,i));
-                break;
-        }
+	    default:  /* other values */
+		printf("%s %s\n", lua_typename(l, t), lua_tostring(l,i));
+		break;
+	}
     }
     printf("\n");  /* end the listing */
 }
@@ -101,19 +101,19 @@ static char const *nginx_rcode_to_str(int rc)
 {
     switch (rc) {
     case NGX_OK:
-        return "NGX_OK";
+	return "NGX_OK";
 
     case NGX_DECLINED:
-        return "NGX_DECLINED";
+	return "NGX_DECLINED";
 
     case NGX_AGAIN:
-        return "NGX_AGAIN";
+	return "NGX_AGAIN";
 
     case NGX_DONE:
-        return "NGX_DONE";
+	return "NGX_DONE";
 
     default:
-        return "UNKNOWN";
+	return "UNKNOWN";
     }
 }
 #endif
@@ -197,7 +197,7 @@ static void update_socket(lua_State *L, conn_data *conn) {
 static void
 ldap_search_handler(ngx_http_request_t *r, ngx_http_lua_socket_tcp_upstream_t *u)
 {
-	ngx_connection_t            *c;
+	ngx_connection_t	    *c;
 
 	c = u->peer.connection;
 
@@ -220,46 +220,46 @@ static int
 ngx_http_lua_socket_prepare_error_retvals(ngx_http_request_t *r,
     ngx_http_lua_socket_tcp_upstream_t *u, lua_State *L, ngx_uint_t ft_type)
 {
-    u_char           errstr[NGX_MAX_ERROR_STR];
-    u_char          *p;
+    u_char	   errstr[NGX_MAX_ERROR_STR];
+    u_char	  *p;
 
     if (ft_type & (NGX_HTTP_LUA_SOCKET_FT_RESOLVER
-                   | NGX_HTTP_LUA_SOCKET_FT_SSL))
+		   | NGX_HTTP_LUA_SOCKET_FT_SSL))
     {
-        return 2;
+	return 2;
     }
 
     lua_pushnil(L);
 
     if (ft_type & NGX_HTTP_LUA_SOCKET_FT_TIMEOUT) {
-        lua_pushliteral(L, "timeout");
+	lua_pushliteral(L, "timeout");
 
     } else if (ft_type & NGX_HTTP_LUA_SOCKET_FT_CLOSED) {
-        lua_pushliteral(L, "closed");
+	lua_pushliteral(L, "closed");
 
     } else if (ft_type & NGX_HTTP_LUA_SOCKET_FT_BUFTOOSMALL) {
-        lua_pushliteral(L, "buffer too small");
+	lua_pushliteral(L, "buffer too small");
 
     } else if (ft_type & NGX_HTTP_LUA_SOCKET_FT_NOMEM) {
-        lua_pushliteral(L, "no memory");
+	lua_pushliteral(L, "no memory");
 
     } else if (ft_type & NGX_HTTP_LUA_SOCKET_FT_CLIENTABORT) {
-        lua_pushliteral(L, "client aborted");
+	lua_pushliteral(L, "client aborted");
 
     } else {
-        if (u->socket_errno) {
+	if (u->socket_errno) {
 #if defined(nginx_version) && nginx_version >= 9000
-            p = ngx_strerror(u->socket_errno, errstr, sizeof(errstr));
+	    p = ngx_strerror(u->socket_errno, errstr, sizeof(errstr));
 #else
-            p = ngx_strerror_r(u->socket_errno, errstr, sizeof(errstr));
+	    p = ngx_strerror_r(u->socket_errno, errstr, sizeof(errstr));
 #endif
-            /* for compatibility with LuaSocket */
-            ngx_strlow(errstr, errstr, p - errstr);
-            lua_pushlstring(L, (char *) errstr, p - errstr);
+	    /* for compatibility with LuaSocket */
+	    ngx_strlow(errstr, errstr, p - errstr);
+	    lua_pushlstring(L, (char *) errstr, p - errstr);
 
-        } else {
-            lua_pushliteral(L, "error");
-        }
+	} else {
+	    lua_pushliteral(L, "error");
+	}
     }
 
     return 2;
@@ -269,22 +269,22 @@ static int
 ngx_http_lua_socket_read_error_retval_handler(ngx_http_request_t *r,
     ngx_http_lua_socket_tcp_upstream_t *u, lua_State *L)
 {
-    ngx_uint_t          ft_type;
+    ngx_uint_t	  ft_type;
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "entered %s", __FUNCTION__);
 
     if (u->read_co_ctx) {
-        u->read_co_ctx->cleanup = NULL;
+	u->read_co_ctx->cleanup = NULL;
     }
 
     ft_type = u->ft_type;
     u->ft_type = 0;
 
     if (u->no_close) {
-        u->no_close = 0;
+	u->no_close = 0;
 
     } else {
-//        ngx_http_lua_socket_tcp_finalize_read_part(r, u);
+//	ngx_http_lua_socket_tcp_finalize_read_part(r, u);
     }
 
     return ngx_http_lua_socket_prepare_error_retvals(r, u, L, ft_type);
@@ -299,7 +299,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 	ngx_http_lua_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
 	ngx_http_lua_co_ctx_t *coctx = ctx->cur_co_ctx;
 	op_ctx_t *op_ctx = coctx->data;
-    
+
 	lua_rawgeti (L, LUA_REGISTRYINDEX, search->conn);
 	conn = (conn_data *)lua_touserdata (L, -1); /* get connection */
 	lua_pop(L, 1); // Remove from stack
@@ -350,9 +350,9 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 		switch (msgtype) {
 		case LDAP_RES_SEARCH_ENTRY: {
 			LDAPMessage *entry = ldap_first_entry (conn->ld, msg);
-			push_dn (L, conn->ld, entry);
-			lua_newtable (L);
-			set_attribs (L, conn->ld, entry, lua_gettop (L));
+			push_dn(L, conn->ld, entry);
+			lua_newtable(L);
+			set_attribs(L, conn->ld, entry, lua_gettop (L));
 			ret = 2; /* two return values */
 			break;
 		}
@@ -386,8 +386,8 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 
 /** Perform a non-blocking read on a an LDAP handle
  *
- * @param[in] r         The current HTTP request.
- * @param[in] u         NGINX socket used for the LDAP connection.
+ * @param[in] r	 The current HTTP request.
+ * @param[in] u	 NGINX socket used for the LDAP connection.
  * @param[in] op_ctx    the current LDAP operation.
  * @return
  *  - NGX_AGAIN no data available.
@@ -402,16 +402,16 @@ static int ldap_get_next_message_with_ctx(ngx_http_request_t *r, ngx_http_lua_so
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "entering ldap_get_next_search_message_with_ctx");
 
 	rc = ldap_result(ldap_conn->ld, op_ctx->msgid, LDAP_MSG_ONE, &timeout, &op_ctx->res);
-	if (rc == 0)
+	if (rc == 0) {
 		// No data to be read
 		ret = NGX_AGAIN;
-	else if (rc == -1)
+	} else if (rc == -1) {
 		ret = NGX_ERROR;
-	else {
+	} else {
 		if (ldap_msgid(op_ctx->res) != op_ctx->msgid) {
 			ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                           "ldap_get_next_search_message: Message with unknown ID received, ignoring. Got %d, expected %d",
-                           ldap_msgid(op_ctx->res), op_ctx->msgid);
+				       "ldap_get_next_search_message: Message with unknown ID received, ignoring. Got %d, expected %d",
+				       ldap_msgid(op_ctx->res), op_ctx->msgid);
 			ret = NGX_ERROR;
 		} else {
 			op_ctx->ldap_rc = rc;
@@ -454,11 +454,11 @@ ngx_http_auth_ldap_sb_close(Sockbuf_IO_Desc *sbiod)
 
 
 //    if (!c->conn.connection->read->error && !c->conn.connection->read->eof) {
-//        if (ngx_shutdown_socket(c->conn.connection->fd, SHUT_RDWR) == -1) {
-//            ngx_connection_error(c->conn.connection, ngx_socket_errno, ngx_shutdown_socket_n " failed");
-//            //ngx_http_auth_ldap_close_connection(c);
-//            return -1;
-//        }
+//	if (ngx_shutdown_socket(c->conn.connection->fd, SHUT_RDWR) == -1) {
+//	    ngx_connection_error(c->conn.connection, ngx_socket_errno, ngx_shutdown_socket_n " failed");
+//	    //ngx_http_auth_ldap_close_connection(c);
+//	    return -1;
+//	}
 //    }
 
     return 0;
@@ -490,8 +490,8 @@ ngx_http_auth_ldap_sb_read(Sockbuf_IO_Desc *sbiod, void *buf, ber_len_t len)
 
     ret = c->conn.connection->recv(c->conn.connection, buf, len);
     if (ret < 0) {
-        errno = (ret == NGX_AGAIN) ? NGX_EAGAIN : NGX_ECONNRESET;
-        return -1;
+	errno = (ret == NGX_AGAIN) ? NGX_EAGAIN : NGX_ECONNRESET;
+	return -1;
     }
 
     return ret;
@@ -506,8 +506,8 @@ ngx_http_auth_ldap_sb_write(Sockbuf_IO_Desc *sbiod, void *buf, ber_len_t len)
 
     ret = c->conn.connection->send(c->conn.connection, buf, len);
     if (ret < 0) {
-        errno = (ret == NGX_AGAIN) ? NGX_EAGAIN : NGX_ECONNRESET;
-        return 0;
+	errno = (ret == NGX_AGAIN) ? NGX_EAGAIN : NGX_ECONNRESET;
+	return 0;
     }
 
     return ret;
@@ -532,7 +532,7 @@ ngx_http_lua_coctx_cleanup(void *data)
 
     op_ctx = coctx->data;
     if (op_ctx == NULL) {
-        return;
+	return;
     }
 
 //    ngx_http_lua_socket_tcp_finalize(u->request, u);
@@ -541,11 +541,11 @@ ngx_http_lua_coctx_cleanup(void *data)
 static void
 ngx_http_lua_content_wev_handler(ngx_http_request_t *r)
 {
-    ngx_http_lua_ctx_t          *ctx;
+    ngx_http_lua_ctx_t	  *ctx;
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
     if (ctx == NULL) {
-        return;
+	return;
     }
 
     (void) ctx->resume_handler(r);
@@ -553,7 +553,7 @@ ngx_http_lua_content_wev_handler(ngx_http_request_t *r)
 
 static int
 ngx_http_lua_socket_tcp_receive_retval_handler(ngx_http_request_t *r,
-                                               ngx_http_lua_socket_tcp_upstream_t *u, lua_State *L)
+					       ngx_http_lua_socket_tcp_upstream_t *u, lua_State *L)
 {
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "lua tcp socket receive return value handler");
 
@@ -564,15 +564,16 @@ ngx_http_lua_socket_tcp_receive_retval_handler(ngx_http_request_t *r,
  *
  * @param[in] L     current Lua environment
  */
-static int lualdap_init(lua_State *L) {
+static int lualdap_init(lua_State *L)
+{
 	ngx_http_request_t *r;
 	ngx_http_lua_ctx_t *ctx;
 
-	/* 
-	 *  Should not be passed in any arguments init_fd(...) is 
+	/*
+	 *  Should not be passed in any arguments init_fd(...) is
 	 *  called on the connection object.
 	 *
-	 *  This takes an Nginx socket(ngx.socket.tcp) and any bind parameters 
+	 *  This takes an Nginx socket(ngx.socket.tcp) and any bind parameters
 	 *  and creates a actual connection handle.
 	 */
 	if (lua_gettop(L) != 0) {
@@ -607,18 +608,18 @@ static int lualdap_init(lua_State *L) {
 
 	/*
 	 *  Associate methods with the connection object.
-	 *  The metatable itself is defined in lualdap_createmeta, which 
+	 *  The metatable itself is defined in lualdap_createmeta, which
 	 *  is called once when we initialise the library.
 	 *
 	 *  This metatable makes the following Lua methods available for the handle:
 	 *  - init_fd   lualdap_init_fd - Initialise a new libldap handle
-	 *              from an existing file descriptor.
-	 *              We use this to build a connection around an 
-	 *              NGINX stream socket that NGINX has already
-	 *              opened.
+	 *	      from an existing file descriptor.
+	 *	      We use this to build a connection around an
+	 *	      NGINX stream socket that NGINX has already
+	 *	      opened.
 	 *  - close     lualdap_close - Close the current connection.
 	 *  - add       lualdap_add - Add a new LDAP object.
-	 *  - compare   lualdap_compare - Compare something? 
+	 *  - compare   lualdap_compare - Compare something?
 	 *  - delete    lualdap_delete - Delete an LDAP object.
 	 *  - modify    lualdap_modify - Modify an LDAP object.
 	 *  - rename    lualdap_rename - Rename an LDAP object.
@@ -631,7 +632,7 @@ static int lualdap_init(lua_State *L) {
 
 static int lualdap_get_fd(lua_State *L) {
 	ngx_http_lua_socket_tcp_upstream_t *u;
-	ngx_http_request_t          *r;
+	ngx_http_request_t	  *r;
 
 	r = ngx_http_lua_get_req(L);
 	if (r == NULL) {
@@ -650,7 +651,7 @@ static int lualdap_get_fd(lua_State *L) {
 
 	if (u == NULL || u->peer.connection == NULL) {
 		return 0;
-        }
+	}
 
 	lua_pushnumber(L, u->peer.connection->fd);
 
@@ -665,8 +666,8 @@ static int lualdap_get_fd(lua_State *L) {
  * - 3 (bind_user)  the user to bind as.
  * - 4 (bind_pass)  the password to bind with.
  * - 5 (bind)       whether we need to rebind the socket.
- *                  we may not need to if we're using a
- *                  a cached connection.
+ *		  we may not need to if we're using a
+ *		  a cached connection.
  * - 6 (sasl_mech)  the sasl mechanism to use when binding - optional.
  */
 static int lualdap_init_fd(lua_State *L) {
@@ -703,7 +704,7 @@ static int lualdap_init_fd(lua_State *L) {
 	if (r == NULL) {
 		return luaL_error(L, "no request found");
 	}
-	
+
 	/*
 	 *  Check we have four additional arguments on the stack
 	 */
@@ -726,7 +727,7 @@ static int lualdap_init_fd(lua_State *L) {
 
 	/*
 	 *  Get the ngx_http_lua_socket_tcp_upstream_t from the LUA object.
-	 *  This is the C handle that contains all the details of the NGINX 
+	 *  This is the C handle that contains all the details of the NGINX
 	 *  stream socket.
 	 */
 	u = lua_touserdata(L, -1);
@@ -742,11 +743,11 @@ static int lualdap_init_fd(lua_State *L) {
 	/*
 	 *  u->peer.connection is the underlying socket.
 	 *
-	 *  ngx_event_t is an event structure with details of the event 
+	 *  ngx_event_t is an event structure with details of the event
 	 *  passed in to the handler function.
 	 *
 	 *  write->handler gets called on write, read->handler gets called
-	 *  on read.  It's not clear why we use a single callback here, 
+	 *  on read.  It's not clear why we use a single callback here,
 	 *  but that callback does distinguish between the event types.
 	 */
 	u->peer.connection->write->handler = ldap_socket_handler;
@@ -761,10 +762,10 @@ static int lualdap_init_fd(lua_State *L) {
      	 *  Check for optional arguments
      	 */
     	if (lua_gettop(L) >= 6 && !lua_isnil(L, 6)) {
-        	sasl_mech = luaL_checkstring(L, 6);
+		sasl_mech = luaL_checkstring(L, 6);
 		lua_pop(L, 6);  /* Clear the optional arg too */
     	} else {
-        	sasl_mech = LDAP_SASL_SIMPLE;
+		sasl_mech = LDAP_SASL_SIMPLE;
 		lua_pop(L, 5);
     	}
 	/*
@@ -798,13 +799,13 @@ static int lualdap_init_fd(lua_State *L) {
 
 	{
 		Sockbuf *sb;
-		
+
 		if (ldap_get_option(conn->ld, LDAP_OPT_SOCKBUF, (void *)&sb) != LDAP_OPT_SUCCESS) {
 		    return 0;
 		}
-		
+
 		/*
-		 *  Here we reuse the socket bio functions from the NGINX 
+		 *  Here we reuse the socket bio functions from the NGINX
 		 *  auth_ldap module.  This saves us from writing duplicate
 		 *  functions I/O functions.
 		 */
@@ -834,10 +835,10 @@ static int lualdap_init_fd(lua_State *L) {
 	{
 		struct berval cred;
 		int rc;
-		
+
 		memcpy(&cred.bv_val, &password, sizeof(cred.bv_val));
 		cred.bv_len = strlen(password);
-		
+
 		ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"Binding LDAP connection");
 		rc = ldap_sasl_bind(conn->ld, (const char *) user, sasl_mech, &cred, NULL, NULL, &msgid);
 		if (rc != LDAP_SUCCESS) {
@@ -857,7 +858,7 @@ static int lualdap_init_fd(lua_State *L) {
 
 	{
 		int rc;
-		
+
 		switch (ldap_get_next_message_with_ctx(r, u, op_ctx)) {
 		case NGX_ERROR:
 		default:
@@ -865,38 +866,38 @@ static int lualdap_init_fd(lua_State *L) {
 			rc = ngx_http_lua_socket_tcp_receive_retval_handler(r, u, L);
 		    	dd("tcp receive retval returned: %d", (int) rc);
 		    	return rc;
-		
+
 		case NGX_OK:
 			ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"lua tcp socket receive done in a single run");
 			return ldap_bind_receive_retval_handler(r, u, L);
-		
+
 		case NGX_AGAIN:
 			ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"waiting for bind result asynchronously");
 			u->read_event_handler = ldap_search_handler;
-			
+
 			ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
 			coctx = ctx->cur_co_ctx;
-			
+
 			ngx_http_lua_cleanup_pending_operation(coctx);
-			
+
 			dd("setting data to %p, coctx:%p", u, coctx);
 			coctx->cleanup = ngx_http_lua_coctx_cleanup;
 			coctx->data = op_ctx;
-			
+
 			if (ctx->entered_content_phase) {
 				r->write_event_handler = ngx_http_lua_content_wev_handler;
 			} else {
 				r->write_event_handler = ngx_http_core_run_phases;
 			}
-			
+
 			u->read_co_ctx = coctx;
 			u->read_waiting = 1;
 			u->read_prepare_retvals = ldap_bind_receive_retval_handler; /* Resumption function */
-			
+
 			if (u->raw_downstream || u->body_downstream) {
 				ctx->downstream = u;
 			}
-			
+
 			ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "yielding from %s", __FUNCTION__);
 			return lua_yield(L, 0);
 		}
@@ -921,22 +922,22 @@ ldap_socket_handler(ngx_event_t *ev)
     c = r->connection;
 
     if (c->fd != (ngx_socket_t) -1) {  /* not a fake connection */
-        ctx = c->log->data;
-        ctx->current_request = r;
+	ctx = c->log->data;
+	ctx->current_request = r;
     }
 
     ngx_log_debug3(NGX_LOG_DEBUG_HTTP, c->log, 0,
-                   "ldap socket handler for \"%V?%V\", wev %d", &r->uri,
-                   &r->args, (int) ev->write);
+		   "ldap socket handler for \"%V?%V\", wev %d", &r->uri,
+		   &r->args, (int) ev->write);
 
     if (ev->write) {
-        u->write_event_handler(r, u);
+	u->write_event_handler(r, u);
 
     } else {
 	/* Since we've got a read event mark write as successful */
 	ngx_http_lua_socket_handle_write_success(r,u);
 
-        u->read_event_handler(r, u);
+	u->read_event_handler(r, u);
     }
 
     ngx_http_run_posted_requests(c);
@@ -947,7 +948,7 @@ ngx_http_lua_socket_dummy_handler(ngx_http_request_t *r,
     ngx_http_lua_socket_tcp_upstream_t *u)
 {
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "lua tcp socket dummy handler");
+		   "lua tcp socket dummy handler");
 }
 
 static ngx_int_t
@@ -970,13 +971,13 @@ ngx_http_lua_socket_tcp_resume_helper(ngx_http_request_t *r, int socket_op)
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
     if (ctx == NULL) {
-        return NGX_ERROR;
+	return NGX_ERROR;
     }
 
     ctx->resume_handler = ngx_http_lua_wev_handler;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "--> lua tcp operation done, resuming lua thread");
+		   "--> lua tcp operation done, resuming lua thread");
 
 
     coctx = ctx->cur_co_ctx;
@@ -989,24 +990,24 @@ ngx_http_lua_socket_tcp_resume_helper(ngx_http_request_t *r, int socket_op)
     switch (socket_op) {
     case SOCKET_OP_CONNECT:
     case SOCKET_OP_WRITE:
-        prepare_retvals = u->write_prepare_retvals;
-        break;
+	prepare_retvals = u->write_prepare_retvals;
+	break;
 
     case SOCKET_OP_READ:
-        prepare_retvals = u->read_prepare_retvals;
-        break;
+	prepare_retvals = u->read_prepare_retvals;
+	break;
 
     default:
-        return NGX_ERROR;
+	return NGX_ERROR;
     }
 
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "lua tcp socket calling prepare retvals handler %p, "
-                   "u:%p", prepare_retvals, u);
+		   "lua tcp socket calling prepare retvals handler %p, "
+		   "u:%p", prepare_retvals, u);
 
     nret = prepare_retvals(r, u, ctx->cur_co_ctx->co);
     if (nret == NGX_AGAIN) {
-        return NGX_DONE;
+	return NGX_DONE;
     }
 
     c = r->connection;
@@ -1017,20 +1018,20 @@ ngx_http_lua_socket_tcp_resume_helper(ngx_http_request_t *r, int socket_op)
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_lua_run_thread returned %s, nreqs=%d", nginx_rcode_to_str(rc), nreqs);
     switch (rc) {
     case NGX_DONE:
-        ngx_http_lua_finalize_request(r, NGX_DONE);
-        /* FALL-THROUGH */
+	ngx_http_lua_finalize_request(r, NGX_DONE);
+	/* FALL-THROUGH */
 
     case NGX_AGAIN:
-        rc = ngx_http_lua_run_posted_threads(c, vm, r, ctx, nreqs);
-        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_lua_run_posted_threads returned %s", nginx_rcode_to_str(rc));
-        return rc;
+	rc = ngx_http_lua_run_posted_threads(c, vm, r, ctx, nreqs);
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_lua_run_posted_threads returned %s", nginx_rcode_to_str(rc));
+	return rc;
 
     default:
-        if (ctx->entered_content_phase) {
-            ngx_http_lua_finalize_request(r, rc);
-            return NGX_DONE;
-        }
-        return rc;
+	if (ctx->entered_content_phase) {
+	    ngx_http_lua_finalize_request(r, rc);
+	    return NGX_DONE;
+	}
+	return rc;
     }
 }
 
@@ -1046,7 +1047,7 @@ static void
 ngx_http_lua_socket_handle_read_success(ngx_http_request_t *r,
     ngx_http_lua_socket_tcp_upstream_t *u)
 {
-    ngx_http_lua_ctx_t          *ctx;
+    ngx_http_lua_ctx_t	  *ctx;
     ngx_http_lua_co_ctx_t       *coctx;
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "entered %s", __FUNCTION__);
@@ -1056,27 +1057,27 @@ ngx_http_lua_socket_handle_read_success(ngx_http_request_t *r,
 #endif
 
     if (u->read_waiting) {
-        u->read_waiting = 0;
+	u->read_waiting = 0;
 
-        coctx = u->read_co_ctx;
-        coctx->cleanup = NULL;
-        u->read_co_ctx = NULL;
+	coctx = u->read_co_ctx;
+	coctx->cleanup = NULL;
+	u->read_co_ctx = NULL;
 
-        ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
-        if (ctx == NULL) {
-            return;
-        }
+	ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
+	if (ctx == NULL) {
+	    return;
+	}
 
-        ctx->resume_handler = ngx_http_lua_socket_tcp_read_resume;
-        ctx->cur_co_ctx = coctx;
+	ctx->resume_handler = ngx_http_lua_socket_tcp_read_resume;
+	ctx->cur_co_ctx = coctx;
 
-        ngx_http_lua_assert(coctx && (!ngx_http_lua_is_thread(ctx)
-                            || coctx->co_ref >= 0));
+	ngx_http_lua_assert(coctx && (!ngx_http_lua_is_thread(ctx)
+			    || coctx->co_ref >= 0));
 
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                       "lua tcp socket waking up the current request (read)");
+	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+		       "lua tcp socket waking up the current request (read)");
 
-        r->write_event_handler(r);
+	r->write_event_handler(r);
     }
 }
 
@@ -1090,7 +1091,7 @@ static void
 ngx_http_lua_socket_handle_write_success(ngx_http_request_t *r,
     ngx_http_lua_socket_tcp_upstream_t *u)
 {
-    ngx_http_lua_ctx_t          *ctx;
+    ngx_http_lua_ctx_t	  *ctx;
     ngx_http_lua_co_ctx_t       *coctx;
 
 #if 1
@@ -1098,25 +1099,25 @@ ngx_http_lua_socket_handle_write_success(ngx_http_request_t *r,
 #endif
 
     if (u->write_waiting) {
-        u->write_waiting = 0;
+	u->write_waiting = 0;
 
-        coctx = u->write_co_ctx;
-        coctx->cleanup = NULL;
-        u->write_co_ctx = NULL;
+	coctx = u->write_co_ctx;
+	coctx->cleanup = NULL;
+	u->write_co_ctx = NULL;
 
-        ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
-        if (ctx == NULL) {
-            return;
-        }
+	ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
+	if (ctx == NULL) {
+	    return;
+	}
 
-        ctx->resume_handler = ngx_http_lua_socket_tcp_write_resume;
-        ctx->cur_co_ctx = coctx;
+	ctx->resume_handler = ngx_http_lua_socket_tcp_write_resume;
+	ctx->cur_co_ctx = coctx;
 
-        ngx_http_lua_assert(coctx && (!ngx_http_lua_is_thread(ctx) || coctx->co_ref >= 0));
+	ngx_http_lua_assert(coctx && (!ngx_http_lua_is_thread(ctx) || coctx->co_ref >= 0));
 
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "lua tcp socket waking up the current request (read)");
+	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "lua tcp socket waking up the current request (read)");
 
-        r->write_event_handler(r);
+	r->write_event_handler(r);
     }
 }
 
@@ -1140,11 +1141,11 @@ ldap_bind_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tcp_
 		if (u->ft_type & NGX_HTTP_LUA_SOCKET_FT_TIMEOUT) {
 		    u->no_close = 1;
 		}
-		
+
 		n = ngx_http_lua_socket_read_error_retval_handler(r, u, L);
 		lua_pushliteral(L, "");
 		ngx_free(op_ctx);
-		
+
 		return n + 1;
 	}
 
@@ -1167,10 +1168,10 @@ ngx_http_auth_ldap_close_connection(conn_data *c, ngx_log_t *log)
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, log, 0, "entered %s", __FUNCTION__);
 
     if (c->ld) {
-        ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0, "http_auth_ldap: Unbinding from the server");
-        ldap_unbind_ext(c->ld, NULL, NULL);
-        /* Unbind is always synchronous, even though the function name does not end with an '_s'. */
-        c->ld = NULL;
+	ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0, "http_auth_ldap: Unbinding from the server");
+	ldap_unbind_ext(c->ld, NULL, NULL);
+	/* Unbind is always synchronous, even though the function name does not end with an '_s'. */
+	c->ld = NULL;
     }
 }
 
@@ -1178,7 +1179,7 @@ static void
 ngx_http_lua_socket_handle_read_error(ngx_http_request_t *r,
     ngx_http_lua_socket_tcp_upstream_t *u, ngx_uint_t ft_type)
 {
-    ngx_http_lua_ctx_t          *ctx;
+    ngx_http_lua_ctx_t	  *ctx;
     ngx_http_lua_co_ctx_t       *coctx;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "lua tcp socket handle read error");
@@ -1192,23 +1193,23 @@ ngx_http_lua_socket_handle_read_error(ngx_http_request_t *r,
     u->read_event_handler = ngx_http_lua_socket_dummy_handler;
 
     if (u->read_waiting) {
-        u->read_waiting = 0;
+	u->read_waiting = 0;
 
-        coctx = u->read_co_ctx;
-        coctx->cleanup = NULL;
-        u->read_co_ctx = NULL;
+	coctx = u->read_co_ctx;
+	coctx->cleanup = NULL;
+	u->read_co_ctx = NULL;
 
-        ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
+	ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
 
-        ctx->resume_handler = ngx_http_lua_socket_tcp_read_resume;
-        ctx->cur_co_ctx = coctx;
+	ctx->resume_handler = ngx_http_lua_socket_tcp_read_resume;
+	ctx->cur_co_ctx = coctx;
 
-        ngx_http_lua_assert(coctx && (!ngx_http_lua_is_thread(ctx)
-                            || coctx->co_ref >= 0));
+	ngx_http_lua_assert(coctx && (!ngx_http_lua_is_thread(ctx)
+			    || coctx->co_ref >= 0));
 
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                       "lua tcp socket waking up the current request");
+	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+		       "lua tcp socket waking up the current request");
 
-        r->write_event_handler(r);
+	r->write_event_handler(r);
     }
 }
