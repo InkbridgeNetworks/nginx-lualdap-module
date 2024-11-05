@@ -508,8 +508,9 @@ static int result_closure(lua_State *L) {
  * When this is evaluated later it'll have all the information it needs to translate the msgid
  * to an LDAPMessage representing the result of the operation.
  *
+ * @note Expects userdata `conn_data` at position #1 on the stack.
+ *
  * @param[in] L		lua_State.
- * @param[in] conn_idx	The connection object's position on the stack.
  * @param[in] msgid	The message id returned from submitting the request.
  * @param[in] op	The type of result we're expecting.
  *			- LDAP_RES_ADD
@@ -519,7 +520,7 @@ static int result_closure(lua_State *L) {
  *			- LDAP_RES_SEARCH_ENTRY
  *			- LDAP_RES_SEARCH_RESULT
  */
-static void result_closure_push(lua_State *L, int conn_idx, ldap_int_t msgid, int op)
+static void result_closure_push(lua_State *L, ldap_int_t msgid, int op)
 {
 	/*
 	 *	push connection (which should be position one on the stack)
@@ -574,7 +575,8 @@ static int lualdap_add(lua_State *L) {
 	rc = ldap_add_ext(conn->ld, dn, attrs.attrs, NULL, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
 
-	return result_closure_push(L, conn, msgid, LDAP_RES_ADD);
+	result_closure_push(L, msgid, LDAP_RES_ADD);
+	return 1;
 }
 
 /*
@@ -601,7 +603,8 @@ static int lualdap_compare (lua_State *L) {
 	rc = ldap_compare_ext (conn->ld, dn, attr, &bvalue, NULL, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
 
-	return result_closure_push(L, conn, msgid, LDAP_RES_COMPARE);
+	result_closure_push(L, msgid, LDAP_RES_COMPARE);
+	return 1;
 }
 
 /*
@@ -624,7 +627,8 @@ static int lualdap_delete (lua_State *L)
 	rc = ldap_delete_ext (conn->ld, dn, NULL, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
 
-	return result_closure_push(L, conn, msgid, LDAP_RES_DELETE);
+	result_closure_push(L, msgid, LDAP_RES_DELETE);
+	return 1;
 }
 
 /*
@@ -680,7 +684,8 @@ static int lualdap_modify (lua_State *L) {
 	rc = ldap_modify_ext (conn->ld, dn, attrs.attrs, NULL, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
 
-	return result_closure_push(L, conn, msgid, LDAP_RES_MODIFY);
+	result_closure_push(L, msgid, LDAP_RES_MODIFY);
+	return 1;
 }
 
 
@@ -706,7 +711,8 @@ static int lualdap_rename (lua_State *L) {
 	rc = ldap_rename (conn->ld, dn, rdn, par, del, NULL, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
 
-	return result_closure_push(L, conn, msgid, LDAP_RES_MODDN);
+	result_closure_push(L, msgid, LDAP_RES_MODDN);
+	return 1;
 }
 
 
