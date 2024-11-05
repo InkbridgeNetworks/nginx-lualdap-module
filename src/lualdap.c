@@ -697,7 +697,7 @@ static int lualdap_rename (lua_State *L) {
 	ldap_pchar_t	dn;
 	ldap_pchar_t	rdn;
 	ldap_pchar_t	par;
-	const int	del;
+	int		del;
 	int		msgid;
 	ldap_int_t	rc;
 
