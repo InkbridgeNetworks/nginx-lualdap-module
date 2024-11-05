@@ -1151,8 +1151,8 @@ static int lualdap_createmeta (lua_State *L) {
 	/*
 	 *	Sets the table of functions loaded with luaL_setfuncs 
   	 *	as the index table.  This makes them callable from
-    	 *	the scope of the table to which the metatable is bound */
- 	 *
+    	 *	the scope of the table to which the metatable is bound
+ 	 */
 	lua_pushliteral(L, "__index");
 	lua_pushvalue(L, -2);
 	lua_settable(L, -3);
