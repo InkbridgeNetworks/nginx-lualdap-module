@@ -77,7 +77,7 @@ typedef const char * ldap_pchar_t;
  */
 typedef struct {
 	int					version;   		//!< LDAP version
-	LDAP          				*ld;      		//!< LDAP connection
+	LDAP	  				*ld;      		//!< LDAP connection
 	ngx_peer_connection_t			conn;
 	ngx_http_lua_socket_tcp_upstream_t	*u;
 } conn_data;
@@ -96,16 +96,16 @@ typedef struct {
 /** LDAP attribute modification structure
  */
 typedef struct {
-	LDAPMod    *attrs[LUALDAP_MAX_ATTRS + 1];
-	LDAPMod    mods[LUALDAP_MAX_ATTRS];
-	int        ai;
-	BerValue   *values[LUALDAP_ARRAY_VALUES_SIZE];
-	int        vi;
-	BerValue   bvals[LUALDAP_MAX_VALUES];
-	int        bi;
+	LDAPMod    	*attrs[LUALDAP_MAX_ATTRS + 1];
+	LDAPMod    	mods[LUALDAP_MAX_ATTRS];
+	int		ai;
+	BerValue	*values[LUALDAP_ARRAY_VALUES_SIZE];
+	int		vi;
+	BerValue	bvals[LUALDAP_MAX_VALUES];
+	int		bi;
 } attrs_data;
 
-int luaopen_ngx_lualdap (lua_State *L);
+int luaopen_ngx_lualdap(lua_State *L);
 ngx_module_t  ngx_lualdap;
 
 #include "lualdap-ngx.c"
@@ -120,24 +120,26 @@ static int faildirect (lua_State *L, const char *errmsg) {
 }
 
 
-/*
-** Get a connection object from the first stack position.
-*/
-static conn_data *getconnection (lua_State *L) {
-	conn_data *conn = (conn_data *)luaL_checkudata (L, 1, LUALDAP_CONNECTION_METATABLE);
-	luaL_argcheck(L, conn!=NULL, 1, LUALDAP_PREFIX"LDAP connection expected");
-	luaL_argcheck(L, conn->ld, 1, LUALDAP_PREFIX"LDAP connection is closed");
+/** Retrieve a connection object from the first stack position
+ *
+ */
+static conn_data *getconnection(lua_State *L)
+{
+	conn_data *conn = (conn_data *)luaL_checkudata(L, 1, LUALDAP_CONNECTION_METATABLE);
+	luaL_argcheck(L, conn != NULL, 1, LUALDAP_PREFIX "LDAP connection expected");
+	luaL_argcheck(L, conn->ld, 1, LUALDAP_PREFIX "LDAP connection is closed");
+
 	return conn;
 }
 
 
-/*
-** Get a search object from the first upvalue position.
-*/
-static search_data *getsearch (lua_State *L) {
+/**  Get a search object from the first upvalue position
+ *
+ */
+static search_data *getsearch(lua_State *L) {
 	/* don't need to check upvalue's integrity */
-	search_data *search = (search_data *)lua_touserdata (L, lua_upvalueindex (1));
-	luaL_argcheck (L,search->conn!=LUA_NOREF,1,LUALDAP_PREFIX"LDAP search is closed");
+	search_data *search = (search_data *)lua_touserdata(L, lua_upvalueindex(1));
+	luaL_argcheck(L,search->conn != LUA_NOREF, 1, LUALDAP_PREFIX"LDAP search is closed");
 	return search;
 }
 
@@ -167,7 +169,6 @@ static void strgettable (lua_State *L, const char *name) {
 	lua_gettable (L, 3);
 }
 
-
 /*
 ** Get the field named name as a string.
 ** The table MUST be at position 3.
@@ -184,7 +185,6 @@ static const char *strtabparam (lua_State *L, const char *name, char *def) {
 	}
 }
 
-
 /*
 ** Get the field named name as an integer.
 ** The table MUST be at position 3.
@@ -199,19 +199,20 @@ static long longtabparam (lua_State *L, const char *name, int def) {
 		return option_error (L, name, "number");
 }
 
-
 /*
 ** Get the field named name as a double.
 ** The table MUST be at position 3.
 */
-static double numbertabparam (lua_State *L, const char *name, double def) {
+static double numbertabparam(lua_State *L, const char *name, double def)
+{
 	strgettable (L, name);
-	if (lua_isnil (L, -1))
+	if (lua_isnil(L, -1)) {
 		return def;
-	else if (lua_isnumber (L, -1))
-		return lua_tonumber (L, -1);
-	else
-		return option_error (L, name, "number");
+	} else if (lua_isnumber(L, -1)) {
+		return lua_tonumber(L, -1);
+	}
+
+	return option_error(L, name, "number");
 }
 
 
@@ -262,12 +263,11 @@ static void A_init (attrs_data *attrs) {
 	attrs->bi = 0;
 }
 
-
 /*
 ** Store the string on top of the stack on the attributes structure.
 ** Increment the bvals counter.
 */
-static BerValue *A_setbval (lua_State *L, attrs_data *a, const char *n) {
+static BerValue *A_setbval(lua_State *L, attrs_data *a, const char *n) {
 	BerValue *ret = &(a->bvals[a->bi]);
 	if (a->bi >= LUALDAP_MAX_VALUES) {
 		luaL_error (L, LUALDAP_PREFIX"too many values");
@@ -297,7 +297,6 @@ static BerValue **A_setval (lua_State *L, attrs_data *a, const char *n) {
 	return ret;
 }
 
-
 /*
 ** Store a NULL pointer on the attributes structure.
 */
@@ -312,7 +311,6 @@ static BerValue **A_nullval (lua_State *L, attrs_data *a) {
 	return ret;
 }
 
-
 /*
 ** Store the value of an attribute.
 ** Valid values are:
@@ -320,7 +318,7 @@ static BerValue **A_nullval (lua_State *L, attrs_data *a) {
 **	string => one value; or
 **	table of strings => many values.
 */
-static BerValue **A_tab2val (lua_State *L, attrs_data *a, const char *name) {
+static BerValue **A_tab2val(lua_State *L, attrs_data *a, const char *name) {
 	int tab = lua_gettop (L);
 	BerValue **ret = &(a->values[a->vi]);
 	if (lua_isboolean (L, tab) && (lua_toboolean (L, tab) == 1)) /* true */
@@ -413,32 +411,38 @@ static int table2strarray (lua_State *L, int tab, char *array[], int limit) {
 			}
 		}
 		array[n] = NULL;
-	} else 
+	} else
 		return luaL_error (L, LUALDAP_PREFIX"bad argument #%d (table or string expected, got %s)", tab, lua_typename (L, lua_type (L, tab)));
 	return 0;
 }
 
 
-/*
-** Get the result message of an operation.
-** #1 upvalue == connection
-** #2 upvalue == msgid
-** #3 upvalue == result code of the message (ADD, DEL etc.) to be received.
-*/
-static int result_message(lua_State *L) {
-	int rc = 0;
-	conn_data *conn = (conn_data *)lua_touserdata (L, lua_upvalueindex (1));
-	int msgid = (int)lua_tonumber (L, lua_upvalueindex (2));
-	/*int res_code = (int)lua_tonumber (L, lua_upvalueindex (3));*/
+/** Closure to return an actualised result from a msgid
+ *
+ * When we issue an operation agains the LDAP directory the LDAP client library
+ * returns a message id. This message id is used to retrieve the result of the
+ * search, mostly as a way of demuxing results from different operations on the
+ * same connection.  This closure, has the connection, msgid, and
+ *
+ * Get the result message of an operation.
+ * #1 upvalue == connection
+ * #2 upvalue == msgid
+ * #3 upvalue == result code of the message (ADD, DEL etc.) to be received.
+ */
+static int result_closure(lua_State *L) {
+	int			rc = 0;
+	conn_data *conn		= (conn_data *)lua_touserdata(L, lua_upvalueindex(1));
+	int msgid		= (int)lua_tonumber(L, lua_upvalueindex(2));
+	/*int res_code = (int)lua_tonumber(L, lua_upvalueindex(3));*/
 	ngx_http_lua_socket_tcp_upstream_t *u;
-	ngx_http_request_t *r;
-	ngx_http_lua_ctx_t *ctx;
-	ngx_http_lua_co_ctx_t *coctx;
-	op_ctx_t *op_ctx;
+	ngx_http_request_t	*r;
+	ngx_http_lua_ctx_t	*ctx;
+	ngx_http_lua_co_ctx_t	*coctx;
+	op_ctx_t		*op_ctx;
+	int			timeout = luaL_optnumber(L, 1, 1000);
 
-	const int timeout = luaL_optnumber (L, 1, 1000);
-
-	luaL_argcheck (L, conn->ld, 1, LUALDAP_PREFIX"LDAP connection is closed");
+	/* Checks if conn->handle is currently NULL */
+	luaL_argcheck(L, conn->ld, 1, LUALDAP_PREFIX "LDAP connection is closed");
 
 	u = conn->u;
 	r = u->request;
@@ -476,7 +480,6 @@ static int result_message(lua_State *L) {
 
 	ngx_http_lua_cleanup_pending_operation(coctx);
 	coctx->cleanup = ngx_http_lua_coctx_cleanup;
-
 	coctx->data = op_ctx;
 
 	if (ctx->entered_content_phase) {
@@ -500,17 +503,34 @@ static int result_message(lua_State *L) {
 }
 
 
-/*
-** Push a function to process the LDAP result.
-*/
-static int create_future (lua_State *L, ldap_int_t rc, int conn, ldap_int_t msgid, int code) {
-	if (rc != LDAP_SUCCESS)
-		return faildirect (L, ldap_err2string (rc));
-	lua_pushvalue (L, conn); /* push connection as #1 upvalue */
-	lua_pushnumber (L, msgid); /* push msgid as #2 upvalue */
-	lua_pushnumber (L, code); /* push code as #3 upvalue */
-	lua_pushcclosure (L, result_message, 3);
-	return 1;
+/** Push a closure/future to process the LDAP result
+ *
+ * When this is evaluated later it'll have all the information it needs to translate the msgid
+ * to an LDAPMessage representing the result of the operation.
+ *
+ * @param[in] L		lua_State.
+ * @param[in] conn_idx	The connection object's position on the stack.
+ * @param[in] msgid	The message id returned from submitting the request.
+ * @param[in] op	The type of result we're expecting.
+ *			- LDAP_RES_ADD
+ *			- LDAP_RES_DELETE
+ *			- LDAP_RES_MODIFY
+ *			- LDAP_RES_MODDN
+ *			- LDAP_RES_SEARCH_ENTRY
+ *			- LDAP_RES_SEARCH_RESULT
+ */
+static void result_closure_push(lua_State *L, int conn_idx, ldap_int_t msgid, int op)
+{
+	/*
+	 *	push connection (which should be position one on the stack)
+	 *	This prevents the current connection frame from being consumed.
+	 */
+	lua_pushvalue(L, 1);			/* copy connection from stack position #1, back onto the stack */
+	lua_pushnumber(L, msgid);		/* push msgid as #2 upvalue */
+	lua_pushnumber(L, op);			/* push code as #3 upvalue */
+
+	/* Consumes the last three pushed items */
+	lua_pushcclosure(L, result_closure, 3);
 }
 
 /*
@@ -518,12 +538,12 @@ static int create_future (lua_State *L, ldap_int_t rc, int conn, ldap_int_t msgi
 ** @param #1 LDAP connection.
 ** @return 1 in case of success; nothing when already closed.
 */
-static int lualdap_close (lua_State *L) {
+static int lualdap_close(lua_State *L) {
 	conn_data *conn = (conn_data *)luaL_checkudata (L, 1, LUALDAP_CONNECTION_METATABLE);
 	luaL_argcheck(L, conn!=NULL, 1, LUALDAP_PREFIX"LDAP connection expected");
 	if (conn->ld == NULL) /* already closed */
 		return 0;
-//	ldap_unbind (conn->ld);
+//	ldap_unbind(conn->ld);
 	conn->ld = NULL;
 	lua_pushnumber (L, 1);
 	return 1;
@@ -538,22 +558,24 @@ static int lualdap_close (lua_State *L) {
 ** @param #4 Table with new entry's attributes and values.
 ** @return Function to process the LDAP result.
 */
-static int lualdap_add (lua_State *L) {
-	conn_data *conn = getconnection (L);
+static int lualdap_add(lua_State *L) {
+	conn_data *conn = getconnection(L);
 	update_socket(L, conn);
 
-	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
+	ldap_pchar_t dn = (ldap_pchar_t)luaL_checkstring (L, 3);
 	attrs_data attrs;
 	ldap_int_t rc;
 	int msgid;
-	A_init (&attrs);
-	if (lua_istable (L, 4))
-		A_tab2mod (L, &attrs, 4, LUALDAP_MOD_ADD);
-	A_lastattr (L, &attrs);
-	rc = ldap_add_ext (conn->ld, dn, attrs.attrs, NULL, NULL, &msgid);
-	return create_future (L, rc, 1, msgid, LDAP_RES_ADD);
-}
 
+	A_init(&attrs);
+	if (lua_istable (L, 4)) A_tab2mod(L, &attrs, 4, LUALDAP_MOD_ADD);
+	A_lastattr(L, &attrs);
+
+	rc = ldap_add_ext(conn->ld, dn, attrs.attrs, NULL, NULL, &msgid);
+	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
+
+	return result_closure_push(L, conn, msgid, LDAP_RES_ADD);
+}
 
 /*
 ** Compare a value against an entry.
@@ -575,10 +597,12 @@ static int lualdap_compare (lua_State *L) {
 	int msgid;
 	bvalue.bv_val = (char *)luaL_checkstring (L, 5);
 	bvalue.bv_len = lua_strlen (L, 5);
-	rc = ldap_compare_ext (conn->ld, dn, attr, &bvalue, NULL, NULL, &msgid);
-	return create_future (L, rc, 1, msgid, LDAP_RES_COMPARE);
-}
 
+	rc = ldap_compare_ext (conn->ld, dn, attr, &bvalue, NULL, NULL, &msgid);
+	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
+
+	return result_closure_push(L, conn, msgid, LDAP_RES_COMPARE);
+}
 
 /*
 ** Delete an entry.
@@ -587,17 +611,21 @@ static int lualdap_compare (lua_State *L) {
 ** @param #3 String with entry's DN.
 ** @return Boolean.
 */
-static int lualdap_delete (lua_State *L) {
-	conn_data *conn = getconnection (L);
+static int lualdap_delete (lua_State *L)
+{
+	conn_data	*conn = getconnection (L);
+	ldap_int_t	rc;
+	int		msgid;
+
 	update_socket(L, conn);
 
 	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
-	ldap_int_t rc;
-	int msgid;
-	rc = ldap_delete_ext (conn->ld, dn, NULL, NULL, &msgid);
-	return create_future (L, rc, 1, msgid, LDAP_RES_DELETE);
-}
 
+	rc = ldap_delete_ext (conn->ld, dn, NULL, NULL, &msgid);
+	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
+
+	return result_closure_push(L, conn, msgid, LDAP_RES_DELETE);
+}
 
 /*
 ** Convert a string into an internal LDAP_MOD operation code.
@@ -647,9 +675,12 @@ static int lualdap_modify (lua_State *L) {
 		A_tab2mod (L, &attrs, param, op);
 		param++;
 	}
-	A_lastattr (L, &attrs);
+	A_lastattr(L, &attrs);
+
 	rc = ldap_modify_ext (conn->ld, dn, attrs.attrs, NULL, NULL, &msgid);
-	return create_future (L, rc, 1, msgid, LDAP_RES_MODIFY);
+	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
+
+	return result_closure_push(L, conn, msgid, LDAP_RES_MODIFY);
 }
 
 
@@ -657,16 +688,25 @@ static int lualdap_modify (lua_State *L) {
 ** Change the distinguished name of an entry.
 */
 static int lualdap_rename (lua_State *L) {
-	conn_data *conn = getconnection (L);
+	conn_data	*conn = getconnection (L);
+	ldap_pchar_t	dn;
+	ldap_pchar_t	rdn;
+	ldap_pchar_t	par;
+	const int	del;
+	int		msgid;
+	ldap_int_t	rc;
+
 	update_socket(L, conn);
 
-	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
-	ldap_pchar_t rdn = (ldap_pchar_t) luaL_checkstring (L, 4);
-	ldap_pchar_t par = (ldap_pchar_t) luaL_optlstring (L, 5, NULL, NULL);
-	const int del = luaL_optnumber (L, 6, 0);
-	int msgid;
-	ldap_int_t rc = ldap_rename (conn->ld, dn, rdn, par, del, NULL, NULL, &msgid);
-	return create_future (L, rc, 1, msgid, LDAP_RES_MODDN);
+	dn = (ldap_pchar_t) luaL_checkstring(L, 3);
+	rdn = (ldap_pchar_t) luaL_checkstring(L, 4);
+	par = (ldap_pchar_t) luaL_optlstring(L, 5, NULL, NULL);
+	del = luaL_optnumber(L, 6, 0);
+
+	rc = ldap_rename (conn->ld, dn, rdn, par, del, NULL, NULL, &msgid);
+	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
+
+	return result_closure_push(L, conn, msgid, LDAP_RES_MODDN);
 }
 
 
@@ -718,7 +758,6 @@ static void set_attribs (lua_State *L, LDAP *ld, LDAPMessage *entry, int tab) {
 	ber_free (ber, 0); /* don't need to test if (ber == NULL) */
 }
 
-
 /*
 ** Get the distinguished name of the given entry and pushes it on the stack.
 */
@@ -727,7 +766,6 @@ static void push_dn(lua_State *L, LDAP *ld, LDAPMessage *entry) {
 	lua_pushstring (L, dn);
 	ldap_memfree (dn);
 }
-
 
 /*
 ** Release connection reference.
@@ -740,7 +778,6 @@ static void search_close(lua_State *L, search_data *search) {
 		search->cookie = NULL;
 	}
 }
-
 
 /*
 ** Get next LDAP message...
@@ -812,12 +849,12 @@ static int next_message(lua_State *L) {
 		rc = ngx_http_lua_socket_tcp_receive_retval_handler(r, u, L);
 		dd("tcp receive retval returned: %d", (int) rc);
 		return rc;
-	
+
 	case NGX_OK:
 		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "lua tcp socket receive done in a single run");
 
 		return ldap_search_receive_retval_handler(r, u, L);
-	
+
 	case NGX_AGAIN:
 		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "waiting asynchronously for search result");
 		u->read_event_handler = ldap_search_handler;
@@ -953,7 +990,7 @@ static int lualdap_search (lua_State *L) {
 	LDAPControl *pageControl=NULL, *controls[2] = { NULL, NULL };
 	struct berval *cookie = NULL;   /* Cookie for paging */
 	search_data * current_search;
-	ngx_http_request_t          *r;
+	ngx_http_request_t	  *r;
 	int msgid;
 
 
@@ -979,7 +1016,7 @@ static int lualdap_search (lua_State *L) {
 	scope = string2scope (L, strtabparam (L, "scope", NULL));
 	sizelimit = longtabparam (L, "sizelimit", LDAP_NO_LIMIT);
 	pagesize = longtabparam (L, "pagesize", 0);
-        current_search = userdatatabparam(L, "search");
+	current_search = userdatatabparam(L, "search");
 	timeout = get_timeout_param (L, &st);
 
 	if (pagesize) {
@@ -988,7 +1025,7 @@ static int lualdap_search (lua_State *L) {
 		}
 		rc = ldap_create_page_control(conn->ld, pagesize, cookie, 1, &pageControl);
 		if (rc != LDAP_SUCCESS) {
-                	return luaL_error (L, LUALDAP_PREFIX"%s", ldap_err2string (rc));
+			return luaL_error (L, LUALDAP_PREFIX"%s", ldap_err2string (rc));
 		}
 
 		/* Insert the control into a list to be passed to the search. */
@@ -1190,7 +1227,7 @@ static void set_info (lua_State *L) {
 
 /** Main symbol exported by lualdap
  *
- * 
+ *
  */
 int luaopen_ngx_lualdap (lua_State *L) {
 	/* Each entry in this table registers a method callable from Lua */
@@ -1213,30 +1250,30 @@ int luaopen_ngx_lualdap (lua_State *L) {
  *  nginx segvs on config test.
  */
 static ngx_http_module_t  ngx_lualdap_module_ctx = {
-	NULL,                                  /* preconfiguration */
-	NULL,                                  /* postconfiguration */
+	NULL,				  /* preconfiguration */
+	NULL,				  /* postconfiguration */
 
-	NULL,                                  /* create main configuration */
-	NULL,                                  /* init main configuration */
+	NULL,				  /* create main configuration */
+	NULL,				  /* init main configuration */
 
-	NULL,                                  /* create server configuration */
-	NULL,                                  /* merge server configuration */
+	NULL,				  /* create server configuration */
+	NULL,				  /* merge server configuration */
 
-	NULL,                                  /* create location configuration */
-	NULL                                   /* merge location configuration */
+	NULL,				  /* create location configuration */
+	NULL				   /* merge location configuration */
 };
 
 ngx_module_t  ngx_lualdap = {
 	NGX_MODULE_V1,
-	&ngx_lualdap_module_ctx,               /* module context */
-	NULL,                                  /* module directives */
-	NGX_HTTP_MODULE,                       /* module type */
-	NULL,                                  /* init master */
-	NULL,                                  /* init module */
-	NULL,                                  /* init process */
-	NULL,                                  /* init thread */
-	NULL,                                  /* exit thread */
-	NULL,                                  /* exit process */
-	NULL,                                  /* exit master */
+	&ngx_lualdap_module_ctx,	       /* module context */
+	NULL,				  /* module directives */
+	NGX_HTTP_MODULE,		       /* module type */
+	NULL,				  /* init master */
+	NULL,				  /* init module */
+	NULL,				  /* init process */
+	NULL,				  /* init thread */
+	NULL,				  /* exit thread */
+	NULL,				  /* exit process */
+	NULL,				  /* exit master */
 	NGX_MODULE_V1_PADDING
 };
