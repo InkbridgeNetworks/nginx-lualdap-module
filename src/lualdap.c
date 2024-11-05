@@ -1124,50 +1124,72 @@ static int lualdap_createmeta (lua_State *L) {
 		{NULL, NULL}
 	};
 
-	if (!luaL_newmetatable (L, LUALDAP_CONNECTION_METATABLE))
-		return 0;
+	/*
+ 	 *	Push a new metatable onto the stack, and add it to 
+   	 *	the global metatable registry. NGINX uses separate
+     	 *	interpreter states per-worker thread, so there's no
+         *	synchornisation issues.  The request will not 
+	 *	containue until the metatable is populated.
+  	 *
+    	 *	requires are also cached on a per-worker basis, so
+      	 *	we don't need to check if the metatables already exist.
+       	 */
+	if (!luaL_newmetatable(L, LUALDAP_CONNECTION_METATABLE)) return 0;
 
-	/* define methods */
-	luaL_openlib (L, NULL, conn_methods, 0);
+	/*
+  	 *	Adds the connection functions to the connection
+    	 *	We use this instead of luaL_openlib to avoid creating
+         *	or modifying globals, which NGINX comoplains about.
+  	 */
+	luaL_setfuncs(L, conn_methods, 0);
 
 	/* define metamethods */
-	lua_pushliteral (L, "__gc");
-	lua_pushcfunction (L, lualdap_close);
-	lua_settable (L, -3);
+	lua_pushliteral(L, "__gc");
+	lua_pushcfunction(L, lualdap_close);
+	lua_settable(L, -3);
 
-	lua_pushliteral (L, "__index");
-	lua_pushvalue (L, -2);
-	lua_settable (L, -3);
+	/*
+	 *	Sets the table of functions loaded with luaL_setfuncs 
+  	 *	as the index table.  This makes them callable from
+    	 *	the scope of the table to which the metatable is bound */
+ 	 *
+	lua_pushliteral(L, "__index");
+	lua_pushvalue(L, -2);
+	lua_settable(L, -3);
 
-	lua_pushliteral (L, "__tostring");
-	lua_pushcfunction (L, lualdap_conn_tostring);
-	lua_settable (L, -3);
+	lua_pushliteral(L, "__tostring");
+	lua_pushcfunction(L, lualdap_conn_tostring);
+	lua_settable(L, -3);
 
-	lua_pushliteral (L, "__metatable");
+	lua_pushliteral(L, "__metatable");
+	lua_pushliteral(L,LUALDAP_PREFIX "you're not allowed to get this metatable");
+	lua_settable(L, -3);
+
+	if (!luaL_newmetatable(L, LUALDAP_SEARCH_METATABLE)) return 0;
+
+	/*
+  	 *	Adds the search functions to the search metatable
+    	 *	We use this instead of luaL_openlib to avoid creating
+         *	or modifying globals, which can create races when
+	 *	used with NGINX.
+	 */
+	luaL_setfuncs(L, search_methods, 0);
+
+	lua_pushliteral(L, "__gc");
+	lua_pushcfunction(L, lualdap_search_close);
+	lua_settable(L, -3);
+
+	lua_pushliteral(L, "__index");
+	lua_pushvalue(L, -2);
+	lua_settable(L, -3);
+
+	lua_pushliteral(L, "__tostring");
+	lua_pushcfunction(L, lualdap_search_tostring);
+	lua_settable(L, -3);
+
+	lua_pushliteral(L, "__metatable");
 	lua_pushliteral(L,LUALDAP_PREFIX"you're not allowed to get this metatable");
-	lua_settable (L, -3);
-
-	if (!luaL_newmetatable (L, LUALDAP_SEARCH_METATABLE))
-		return 0;
-
-	/* define methods */
-	luaL_openlib (L, NULL, search_methods, 0);
-
-	lua_pushliteral (L, "__gc");
-	lua_pushcfunction (L, lualdap_search_close);
-	lua_settable (L, -3);
-
-	lua_pushliteral (L, "__index");
-	lua_pushvalue (L, -2);
-	lua_settable (L, -3);
-
-	lua_pushliteral (L, "__tostring");
-	lua_pushcfunction (L, lualdap_search_tostring);
-	lua_settable (L, -3);
-
-	lua_pushliteral (L, "__metatable");
-	lua_pushliteral(L,LUALDAP_PREFIX"you're not allowed to get this metatable");
-	lua_settable (L, -3);
+	lua_settable(L, -3);
 
 	return 0;
 }
@@ -1215,19 +1237,19 @@ static int lualdap_open_simple (lua_State *L) {
 }
 
 
-/*
-** Assumes the table is on top of the stack.
-*/
+/** Adds metadata to the module table at the top of the stack 
+ *
+ */
 static void set_info (lua_State *L) {
-	lua_pushliteral (L, "_COPYRIGHT");
-	lua_pushliteral (L, "Copyright (C) 2003-2007 Kepler Project");
-	lua_settable (L, -3);
-	lua_pushliteral (L, "_DESCRIPTION");
-	lua_pushliteral (L, "LuaLDAP is a simple interface from Lua to an LDAP client");
-	lua_settable (L, -3);
-	lua_pushliteral (L, "_VERSION");
-	lua_pushliteral (L, "LuaLDAP 1.1.1");
-	lua_settable (L, -3);
+	lua_pushliteral(L, "_COPYRIGHT");
+	lua_pushliteral(L, "Copyright (C) 2003-2007 Kepler Project");
+	lua_settable(L, -3);
+	lua_pushliteral(L, "_DESCRIPTION");
+	lua_pushliteral(L, "LuaLDAP is a simple interface from Lua to an LDAP client");
+	lua_settable(L, -3);
+	lua_pushliteral(L, "_VERSION");
+	lua_pushliteral(L, "LuaLDAP 1.1.1");
+	lua_settable(L, -3);
 }
 
 
@@ -1244,9 +1266,15 @@ int luaopen_ngx_lualdap (lua_State *L) {
 		{NULL, NULL},
 	};
 
-	lualdap_createmeta (L);
-	luaL_openlib (L, LUALDAP_TABLENAME, lualdap, 0);
-	set_info (L);
+	/*
+ 	 *	Registers metatables in the global metatable registry
+   	 *	Should not leave anything on the Lua stack.
+   	 */
+	lualdap_createmeta(L);
+        lua_newtable(L);
+        luaL_setfuncs(L, lualdap, 0);
+
+	set_info(L);
 
 	return 1;
 }
@@ -1266,14 +1294,14 @@ static ngx_http_module_t  ngx_lualdap_module_ctx = {
 	NULL,				  /* merge server configuration */
 
 	NULL,				  /* create location configuration */
-	NULL				   /* merge location configuration */
+	NULL				  /* merge location configuration */
 };
 
 ngx_module_t  ngx_lualdap = {
 	NGX_MODULE_V1,
-	&ngx_lualdap_module_ctx,	       /* module context */
+	&ngx_lualdap_module_ctx,	  /* module context */
 	NULL,				  /* module directives */
-	NGX_HTTP_MODULE,		       /* module type */
+	NGX_HTTP_MODULE,		  /* module type */
 	NULL,				  /* init master */
 	NULL,				  /* init module */
 	NULL,				  /* init process */
