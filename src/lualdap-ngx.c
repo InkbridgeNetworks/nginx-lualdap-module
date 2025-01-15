@@ -309,7 +309,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 	LDAPControl **returnedControls = NULL;
 
 	ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "got search result");
-	ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "conn %p res %p res code %d", conn->ld, op_ctx->res, op_ctx->ldap_rc);
+	ngx_log_debug3(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "conn %p res %p res code %d", conn->ld, op_ctx->res, op_ctx->ldap_rc);
 
 	if (u->ft_type) {
 		n = ngx_http_lua_socket_read_error_retval_handler(r, u, L);
