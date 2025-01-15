@@ -406,6 +406,8 @@ static int ldap_get_next_message_with_ctx(ngx_http_request_t *r, ngx_http_lua_so
 		// No data to be read
 		ret = NGX_AGAIN;
 	} else if (rc == -1) {
+		ldap_get_option(ldap_conn->ld, LDAP_OPT_RESULT_CODE, &rc);
+		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX"ldap_result returned error with result code %d", rc);
 		ret = NGX_ERROR;
 	} else {
 		if (ldap_msgid(op_ctx->res) != op_ctx->msgid) {
