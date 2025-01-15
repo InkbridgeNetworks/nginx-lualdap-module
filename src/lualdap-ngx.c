@@ -300,6 +300,8 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 	ngx_http_lua_co_ctx_t *coctx = ctx->cur_co_ctx;
 	op_ctx_t *op_ctx = coctx->data;
 
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "entered %s", __FUNCTION__);
+
 	lua_rawgeti (L, LUA_REGISTRYINDEX, search->conn);
 	conn = (conn_data *)lua_touserdata (L, -1); /* get connection */
 	lua_pop(L, 1); // Remove from stack
@@ -307,6 +309,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 	LDAPControl **returnedControls = NULL;
 
 	ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "got search result");
+	ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "conn %p res %p res code %d", conn->ld, op_ctx->res, op_ctx->ldap_rc);
 
 	if (u->ft_type) {
 		n = ngx_http_lua_socket_read_error_retval_handler(r, u, L);
