@@ -874,6 +874,11 @@ static int lualdap_init_fd(lua_State *L) {
 
 		case NGX_OK:
 			ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX"lua tcp socket receive done in a single run");
+
+			ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
+			coctx = ctx->cur_co_ctx;
+			coctx->data = op_ctx;
+
 			return ldap_bind_receive_retval_handler(r, u, L);
 
 		case NGX_AGAIN:

@@ -859,6 +859,10 @@ static int next_message(lua_State *L) {
 	case NGX_OK:
 		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "lua tcp socket receive done in a single run");
 
+		ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
+		coctx = ctx->cur_co_ctx;
+		coctx->data = op_ctx;
+
 		return ldap_search_receive_retval_handler(r, u, L);
 
 	case NGX_AGAIN:
