@@ -5,6 +5,8 @@ A note was added to the project that if you were the maintainer then send them a
 
 Significant contributions were made by:
 
+ * Philippe Wooding, Arran Cudbard-Bell, Nick Porter of Inkbridge Networks
+   * Ported LuaLDAP to work under OpenResty
  * [Matthew Wild](https://github.com/mwild1) - Cleanup and LDAP API 2.3 update
  * [Dennis Schridde](https://github.com/devurandom) - Cleanup and LDAP API 2.3 update
  * [Vadim A. Misbakh-Soloviov](https://github.com/msva) - Assert fix
