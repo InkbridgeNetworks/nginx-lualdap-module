@@ -16,6 +16,6 @@ modified.
 
 Please see CONTRIBUTORS for contribution information and documentation on original source
 
-Note: This is a work in progress, and whilst it's used heavily within Network RADIUS
+Note: This is a work in progress, and whilst it's used heavily within Inkbridge Networks
 be aware that the code uses lua-nginx's private APIs, and compatibility with a given
 version of NGINX or lua-nginx is not guaranteed.
