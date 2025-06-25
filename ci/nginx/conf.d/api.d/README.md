@@ -1,0 +1,1 @@
+# Expose various LuaLDAP-nginx functions as HTTP endpoints to allow testing

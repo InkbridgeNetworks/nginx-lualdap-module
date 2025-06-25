@@ -1,0 +1,129 @@
+#!/bin/sh
+
+print_help() {
+  cat <<EOF
+Usage: $(basename "$0") -f <openresty_tarball.tar.gz> [-v]
+
+Options:
+  -f FILE  Path to the OpenResty tar.gz tarball (e.g., openresty-1.25.3.1.tar.gz)
+  -v       Enable verbose debug output
+  -h       Show this help message and exit
+
+Example:
+  $(basename "$0") -f /tmp/openresty-1.25.3.1.tar.gz -v
+EOF
+}
+
+error() {
+  echo "$1" >&2
+}
+
+debug() {
+  if [ "$verbose" = "1" ]; then
+    echo "$1"
+  fi
+}
+
+# Initialize variables
+openresty_tarball=""
+verbose=0
+
+# Resolve script path (POSIX-safe)
+SCRIPT="$0"
+case "$SCRIPT" in
+  /*)
+    SCRIPT_PATH="$SCRIPT"
+    ;;
+  *)
+    SCRIPT_PATH="$(pwd)/$SCRIPT"
+    ;;
+esac
+SCRIPT_DIR=$(dirname "$SCRIPT_PATH")
+SRC_DIR="${SCRIPT_DIR}/openresty"
+INSTALL_DIR="${SCRIPT_DIR}/build"
+NGINX_CONF_FILE="${SCRIPT_DIR}/ci/nginx/nginx.conf"
+
+# Parse options
+while getopts "f:vh" opt; do
+  case "$opt" in
+    f)
+      openresty_tarball=$OPTARG
+      ;;
+    v)
+      verbose=1
+      ;;
+    h)
+      print_help
+      exit 0
+      ;;
+    \?)
+      error "Invalid option: -$OPTARG"
+      print_help
+      exit 1
+      ;;
+    :)
+      error "Option -$OPTARG requires an argument"
+      print_help
+      exit 1
+      ;;
+  esac
+done
+
+# Validate input
+if [ -z "$openresty_tarball" ]; then
+  error "OpenResty tarball file not specified"
+  print_help
+  exit 1
+fi
+
+if [ ! -f "$openresty_tarball" ]; then
+  error "File '$openresty_tarball' does not exist"
+  exit 1
+fi
+
+# Prepare build directory
+if ! mkdir -p "$SRC_DIR"; then
+  error "Failed to create build directory '$SRC_DIR'"
+  exit 1
+fi
+
+# Extract tarball, stripping top-level directory
+if ! tar -xzf "$openresty_tarball" --strip-components=1 -C "$SRC_DIR"; then
+  error "Extraction failed"
+  exit 1
+fi
+
+# Optional version check (non-fatal)
+expected_version=$(basename "$openresty_tarball" | sed -n 's/^openresty-\([0-9.]*\)\.tar\.gz$/\1/p')
+nginx_header="$SRC_DIR/src/core/nginx.h"
+if [ -f "$nginx_header" ]; then
+  actual_version=$(sed -n 's/^#define[[:space:]]\+NGINX_VERSION[[:space:]]\+"\([0-9.]*\)"/\1/p' "$nginx_header")
+  if [ -n "$expected_version" ] && [ -n "$actual_version" ] && [ "$expected_version" != "$actual_version" ]; then
+    debug "Version mismatch: expected $expected_version, got $actual_version"
+  fi
+fi
+
+# Run configure
+cd "$SRC_DIR"
+
+debug "Running configure"
+if ! ./configure \
+  --prefix="${INSTALL_DIR}" \
+  --user=root \
+  --group=root \
+  --with-http_ssl_module \
+  --with-debug \
+  --with-pcre \
+  --with-pcre-jit \
+  --with-http_stub_status_module \
+  --with-http_auth_request_module \
+  --add-dynamic-module=../; then
+  error "Configuration failed"
+  exit 1
+fi
+
+# Show startup command
+echo
+echo "...then to start OpenResty in debug mode:"
+echo
+echo "  ./build/nginx/sbin/nginx -g 'daemon off;' -c ${NGINX_CONF_FILE}"
