@@ -4,4 +4,5 @@
 *.so
 *.so.*
 *.rock
+build
 openresty
