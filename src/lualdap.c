@@ -1201,55 +1201,12 @@ static int lualdap_createmeta (lua_State *L) {
 	return 0;
 }
 
-/*
-** Open and initialize a connection to a server.
-** @param #1 String with hostname.
-** @param #2 String with username.
-** @param #3 String with password.
-** @param #4 Boolean indicating if TLS must be used.
-** @return #1 Userdata with connection structure.
-*/
-static int lualdap_open_simple (lua_State *L) {
-	ldap_pchar_t host = (ldap_pchar_t) luaL_checkstring (L, 1);
-	ldap_pchar_t who = (ldap_pchar_t) luaL_optstring (L, 2, NULL);
-	const char *password = luaL_optstring (L, 3, NULL);
-	int use_tls = lua_toboolean (L, 4);
-	conn_data *conn = (conn_data *)lua_newuserdata (L, sizeof(conn_data));
-	int err;
-
-	/* Initialize */
-	lualdap_setmeta (L, LUALDAP_CONNECTION_METATABLE);
-	conn->version = 0;
-
-	err = ldap_initialize( &conn->ld, host);
-	if (err)
-		return faildirect(L,LUALDAP_PREFIX"Error connecting to server");
-	/* Set protocol version */
-	conn->version = LDAP_VERSION3;
-	if (ldap_set_option (conn->ld, LDAP_OPT_PROTOCOL_VERSION, &conn->version)
-		!= LDAP_OPT_SUCCESS)
-		return faildirect(L, LUALDAP_PREFIX"Error setting LDAP version");
-	/* Use TLS */
-	if (use_tls) {
-		int rc = ldap_start_tls_s (conn->ld, NULL, NULL);
-		if (rc != LDAP_SUCCESS)
-			return faildirect (L, ldap_err2string (rc));
-	}
-	/* Bind to a server */
-	err = ldap_bind_s (conn->ld, who, password, LDAP_AUTH_SIMPLE);
-	if (err != LDAP_SUCCESS)
-		return faildirect (L, ldap_err2string (err));
-
-	return 1;
-}
-
-
-/** Adds metadata to the module table at the top of the stack 
+/** Adds metadata to the module table at the top of the stack
  *
  */
 static void set_info (lua_State *L) {
 	lua_pushliteral(L, "_COPYRIGHT");
-	lua_pushliteral(L, "Copyright (C) 2003-2007 Kepler Project");
+	lua_pushliteral(L, "Copyright (C) 2023-2025 Canada 12952386 Inc, 2003-2007 Kepler Project");
 	lua_settable(L, -3);
 	lua_pushliteral(L, "_DESCRIPTION");
 	lua_pushliteral(L, "LuaLDAP is a simple interface from Lua to an LDAP client");
@@ -1267,7 +1224,6 @@ static void set_info (lua_State *L) {
 int luaopen_ngx_lualdap (lua_State *L) {
 	/* Each entry in this table registers a method callable from Lua */
 	struct luaL_Reg lualdap[] = {
-		{"open_simple", lualdap_open_simple},	/* Old synchronous bind using a libldap conneciton handle*/
 		{"init", lualdap_init},			/* */
 		{"get_fd", lualdap_get_fd},
 		{NULL, NULL},
@@ -1278,8 +1234,8 @@ int luaopen_ngx_lualdap (lua_State *L) {
    	 *	Should not leave anything on the Lua stack.
    	 */
 	lualdap_createmeta(L);
-        lua_newtable(L);
-        luaL_setfuncs(L, lualdap, 0);
+	lua_newtable(L);
+    luaL_setfuncs(L, lualdap, 0);
 
 	set_info(L);
 
