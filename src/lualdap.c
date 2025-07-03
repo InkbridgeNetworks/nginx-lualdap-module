@@ -76,22 +76,21 @@ typedef const char * ldap_pchar_t;
 /** LDAP connection information
  */
 typedef struct {
-	int					version;   		//!< LDAP version
-	LDAP	  				*ld;      		//!< LDAP connection
-	ngx_peer_connection_t			conn;
-	ngx_http_lua_socket_tcp_upstream_t	*u;
+	int					version;   	//!< LDAP version
+	LDAP	  				*ld;      	//!< LDAP handle.
+	ngx_peer_connection_t			conn;		//!< NGINX peer connection
+	ngx_http_lua_socket_tcp_upstream_t	*u;		//!< NGINX Socket object
 } conn_data;
 
 
 /** LDAP search context information
  */
 typedef struct {
-	int					conn;			//!< conn_data reference
-	int					msgid;
-	struct berval				*cookie;		//!< Cookie for paging
-	int					morePages;		//!< More pages are available on server
 } search_data;
-
+	int		conn;			//!< conn_data reference
+	int		msgid;			//!< Unique msgId associated with the search.
+	struct berval	*cookie;		//!< Cookie for paging or persistent searching
+	int		morePages:1;		//!< More pages are available on server.
 
 /** LDAP attribute modification structure
  */
@@ -122,6 +121,10 @@ static int faildirect (lua_State *L, const char *errmsg) {
 
 /** Retrieve a connection object from the first stack position
  *
+ * @note Does not modify the lua stack, just verifies that the first
+ *       stack position is a valid connection object.
+ *
+ * @return conn_data pointer to the connection object.
  */
 static conn_data *getconnection(lua_State *L)
 {
@@ -234,7 +237,7 @@ static int booltabparam (lua_State *L, const char *name, int def) {
 ** Get the field named name as a boolean.
 ** The table MUST be at position 3.
 */
-static search_data * userdatatabparam (lua_State *L, const char *name) {
+static search_data *userdatatabparam (lua_State *L, const char *name) {
 	strgettable (L, name);
 	if (lua_isnil (L, -1))
 		return NULL;
@@ -430,16 +433,16 @@ static int table2strarray (lua_State *L, int tab, char *array[], int limit) {
  * #3 upvalue == result code of the message (ADD, DEL etc.) to be received.
  */
 static int result_closure(lua_State *L) {
-	int			rc = 0;
-	conn_data *conn		= (conn_data *)lua_touserdata(L, lua_upvalueindex(1));
-	int msgid		= (int)lua_tonumber(L, lua_upvalueindex(2));
+	int									rc = 0;
+	conn_data							*conn = (conn_data *)lua_touserdata(L, lua_upvalueindex(1));
+	int									msgid = (int)lua_tonumber(L, lua_upvalueindex(2));
 	/*int res_code = (int)lua_tonumber(L, lua_upvalueindex(3));*/
-	ngx_http_lua_socket_tcp_upstream_t *u;
-	ngx_http_request_t	*r;
-	ngx_http_lua_ctx_t	*ctx;
-	ngx_http_lua_co_ctx_t	*coctx;
-	op_ctx_t		*op_ctx;
-	int			timeout = luaL_optnumber(L, 1, 1000);
+	ngx_http_lua_socket_tcp_upstream_t	*u;
+	ngx_http_request_t					*r;
+	ngx_http_lua_ctx_t					*ctx;
+	ngx_http_lua_co_ctx_t				*coctx;
+	op_ctx_t							*op_ctx;
+	int									timeout = luaL_optnumber(L, 1, 1000);
 
 	/* Checks if conn->handle is currently NULL */
 	luaL_argcheck(L, conn->ld, 1, LUALDAP_PREFIX "LDAP connection is closed");
@@ -942,12 +945,12 @@ static search_data * create_search(lua_State *L, int conn_index, int msgid, stru
 	search->msgid = msgid;
 	search->cookie = cookie;
 	search->morePages = FALSE;
-	lua_pushvalue (L, conn_index);
-	search->conn = luaL_ref (L, LUA_REGISTRYINDEX);
+
+	lua_pushvalue(L, conn_index);
+	search->conn = luaL_ref(L, LUA_REGISTRYINDEX);
 
 	return search;
 }
-
 
 /*
 ** Fill in the attrs array, according to the attrs parameter.
@@ -997,17 +1000,16 @@ static int lualdap_search (lua_State *L) {
 	char *attrs[LUALDAP_MAX_ATTRS];
 	int scope, attrsonly, rc, sizelimit, pagesize;
 	struct timeval st, *timeout;
-	LDAPControl *pageControl=NULL, *controls[2] = { NULL, NULL };
+	LDAPControl *pageControl = NULL, *controls[2] = { NULL, NULL };
 	struct berval *cookie = NULL;   /* Cookie for paging */
 	search_data * current_search;
 	ngx_http_request_t	  *r;
 	int msgid;
 
-
 	if (!lua_istable (L, 2))
-		return luaL_error (L, LUALDAP_PREFIX"no connection socket");
+		return luaL_error(L, LUALDAP_PREFIX "no connection socket");
 	if (!lua_istable (L, 3))
-		return luaL_error (L, LUALDAP_PREFIX"no search specification");
+		return luaL_error(L, LUALDAP_PREFIX "no search specification");
 	if (!get_attrs_param (L, attrs))
 		return 2;
 
@@ -1020,14 +1022,14 @@ static int lualdap_search (lua_State *L) {
 	}
 
 	/* get other parameters */
-	attrsonly = booltabparam (L, "attrsonly", 0);
-	base = (ldap_pchar_t) strtabparam (L, "base", NULL);
-	filter = (ldap_pchar_t) strtabparam (L, "filter", NULL);
-	scope = string2scope (L, strtabparam (L, "scope", NULL));
-	sizelimit = longtabparam (L, "sizelimit", LDAP_NO_LIMIT);
-	pagesize = longtabparam (L, "pagesize", 0);
+	attrsonly = booltabparam(L, "attrsonly", 0);
+	base = (ldap_pchar_t) strtabparam(L, "base", NULL);
+	filter = (ldap_pchar_t) strtabparam(L, "filter", NULL);
+	scope = string2scope(L, strtabparam(L, "scope", NULL));
+	sizelimit = longtabparam(L, "sizelimit", LDAP_NO_LIMIT);
+	pagesize = longtabparam(L, "pagesize", 0);
 	current_search = userdatatabparam(L, "search");
-	timeout = get_timeout_param (L, &st);
+	timeout = get_timeout_param(L, &st);
 
 	if (pagesize) {
 		if (current_search) {
@@ -1056,14 +1058,13 @@ static int lualdap_search (lua_State *L) {
 	} else {
 		create_search(L, 1, msgid, cookie);
 	}
-	lua_pushvalue (L, -1);
+	lua_pushvalue(L, -1);
 	lua_pushcclosure(L, next_message, 1);	/* This is the ierator the caller can use to page out results */
 	lua_pushvalue (L, -2);
 	lua_remove(L, -3);
 
 	return 2;
 }
-
 
 /*
 ** Return the name of the object's metatable.
@@ -1079,7 +1080,6 @@ static int lualdap_conn_tostring (lua_State *L) {
 	lua_pushfstring (L, "%s (%s)", LUALDAP_CONNECTION_METATABLE, buff);
 	return 1;
 }
-
 
 /*
 ** Return the name of the object's metatable.
@@ -1129,21 +1129,21 @@ static int lualdap_createmeta (lua_State *L) {
 	};
 
 	/*
- 	 *	Push a new metatable onto the stack, and add it to 
+ 	 *	Push a new metatable onto the stack, and add it to
    	 *	the global metatable registry. NGINX uses separate
-     	 *	interpreter states per-worker thread, so there's no
-         *	synchornisation issues.  The request will not 
+	 *	interpreter states per-worker thread, so there's no
+	 *	synchornisation issues.  The request will not
 	 *	containue until the metatable is populated.
   	 *
-    	 *	requires are also cached on a per-worker basis, so
-      	 *	we don't need to check if the metatables already exist.
-       	 */
+	 *	requires are also cached on a per-worker basis, so
+	 *	we don't need to check if the metatables already exist.
+	 */
 	if (!luaL_newmetatable(L, LUALDAP_CONNECTION_METATABLE)) return 0;
 
 	/*
   	 *	Adds the connection functions to the connection
-    	 *	We use this instead of luaL_openlib to avoid creating
-         *	or modifying globals, which NGINX comoplains about.
+	 *	We use this instead of luaL_openlib to avoid creating
+	 *	or modifying globals, which NGINX complains about.
   	 */
 	luaL_setfuncs(L, conn_methods, 0);
 
@@ -1153,7 +1153,7 @@ static int lualdap_createmeta (lua_State *L) {
 	lua_settable(L, -3);
 
 	/*
-	 *	Sets the table of functions loaded with luaL_setfuncs 
+	 *	Sets the table of functions loaded with luaL_setfuncs
   	 *	as the index table.  This makes them callable from
     	 *	the scope of the table to which the metatable is bound
  	 */
@@ -1169,12 +1169,15 @@ static int lualdap_createmeta (lua_State *L) {
 	lua_pushliteral(L,LUALDAP_PREFIX "you're not allowed to get this metatable");
 	lua_settable(L, -3);
 
+	/*
+	 *  Create reusable metatable for searches
+	 */
 	if (!luaL_newmetatable(L, LUALDAP_SEARCH_METATABLE)) return 0;
 
 	/*
   	 *	Adds the search functions to the search metatable
-    	 *	We use this instead of luaL_openlib to avoid creating
-         *	or modifying globals, which can create races when
+	 *	We use this instead of luaL_openlib to avoid creating
+	 *	or modifying globals, which can create races when
 	 *	used with NGINX.
 	 */
 	luaL_setfuncs(L, search_methods, 0);
@@ -1192,7 +1195,7 @@ static int lualdap_createmeta (lua_State *L) {
 	lua_settable(L, -3);
 
 	lua_pushliteral(L, "__metatable");
-	lua_pushliteral(L,LUALDAP_PREFIX"you're not allowed to get this metatable");
+	lua_pushliteral(L,LUALDAP_PREFIX "you're not allowed to get this metatable");
 	lua_settable(L, -3);
 
 	return 0;
