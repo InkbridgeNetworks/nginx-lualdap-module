@@ -82,6 +82,11 @@ typedef struct {
 	ngx_http_lua_socket_tcp_upstream_t	*u;		//!< NGINX Socket object
 } conn_data;
 
+typedef enum {
+	SEARCH_TYPE_NORMAL = 0,			//!< Standard oneshot search with no server side state.
+	SEARCH_TYPE_PERSISTENT,			//!< Persistent search
+	SEARCH_TYPE_PAGED,			//!< Paged search
+} search_type_t;
 
 /** LDAP search context information
  *
@@ -91,6 +96,7 @@ typedef struct {
 	int		conn;			//!< conn_data reference
 	int		msgid;			//!< Unique msgId associated with the search.
 	struct berval	*cookie;		//!< Cookie for paging or persistent searching
+	search_type_t	type;			//!< What type of search this is.
 	int		morePages:1;		//!< More pages are available on server.
 } search_data_t;
 
@@ -782,13 +788,32 @@ static void push_dn(lua_State *L, LDAP *ld, LDAPMessage *entry) {
 /*
 ** Release connection reference.
 */
-static void search_close(lua_State *L, search_data *search) {
-	luaL_unref (L, LUA_REGISTRYINDEX, search->conn);
-	search->conn = LUA_NOREF;
+static void search_close(lua_State *L, search_data_t *search)
+{
 	if (search->cookie != NULL) {
 		ber_bvfree(search->cookie);
 		search->cookie = NULL;
 	}
+
+	switch (search->type) {
+	case SEARCH_TYPE_PAGED:
+	case SEARCH_TYPE_PERSISTENT:
+	{
+		conn_data *conn;
+		lua_rawgeti(L, LUA_REGISTRYINDEX, search->conn);
+		conn = lua_touserdata(L, -1);
+		lua_pop(L, 1);
+
+		/* Free up resources on the serve allocated to paginated or persistent search */
+		ldap_abandon(conn->ld, search->msgid);
+	}
+
+	case SEARCH_TYPE_NORMAL:
+		break;	/* Nothing to free here */
+	}
+
+	luaL_unref(L, LUA_REGISTRYINDEX, search->conn);
+	search->conn = LUA_NOREF;
 }
 
 /*
@@ -937,16 +962,25 @@ static int lualdap_search_close(lua_State *L) {
 	return 1;
 }
 
-
-/*
-** Create a search object and leaves it on top of the stack.
-*/
-static search_data * create_search(lua_State *L, int conn_index, int msgid, struct berval *cookie) {
-	search_data *search = (search_data *)lua_newuserdata (L, sizeof (search_data));
-	lualdap_setmeta (L, LUALDAP_SEARCH_METATABLE);
+/** Create a search object and leaves it on top of the stack.
+ *
+ * @param L			lua_State.
+ * @param conn_index	Index of the connection in the stack.
+ * @param msgid		Message ID of the search operation.
+ * @param cookie	Pointer to a berval structure containing the cookie for paging or persitence.
+ * @param type		Type of search, one of:
+ *					- SEARCH_TYPE_NORMAL for a normal search.
+ *					- SEARCH_TYPE_PAGED for a paged search.
+ *					- SEARCH_TYPE_PERSISTENT for a persistent search.
+ */
+static search_data_t *create_search(lua_State *L, int conn_index, int msgid, struct berval *cookie, search_type_t type)
+{
+	search_data_t *search = (search_data_t *)lua_newuserdata (L, sizeof (search_data_t));
+	lualdap_setmeta(L, LUALDAP_SEARCH_METATABLE);
 	search->conn = LUA_NOREF;
 	search->msgid = msgid;
 	search->cookie = cookie;
+	search->type = type;
 	search->morePages = FALSE;
 
 	lua_pushvalue(L, conn_index);
@@ -1056,11 +1090,11 @@ static int lualdap_search(lua_State *L)
 	ldap_control_free(pageControl);
 
 	if (current_search) {
-		create_search(L, 1, msgid, current_search->cookie);
+		create_search(L, 1, msgid, current_search->cookie, SEARCH_TYPE_NORMAL);
 		/* Set cookie to NULL to avoid double free */
 		current_search->cookie = NULL;
 	} else {
-		create_search(L, 1, msgid, cookie);
+		create_search(L, 1, msgid, cookie, SEARCH_TYPE_PAGED);
 	}
 	lua_pushvalue(L, -1);
 	lua_pushcclosure(L, next_message, 1);	/* This is the ierator the caller can use to page out results */
