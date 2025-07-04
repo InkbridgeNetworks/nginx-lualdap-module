@@ -1022,6 +1022,100 @@ static struct timeval *get_timeout_param (lua_State *L, struct timeval *st) {
 		return st;
 }
 
+/** Perform a persistent search operation.
+ *
+ * Initialises a persistent search operation on the given connection.
+ * Thie connection is not returned to the pool until the search is closed.
+ *
+ * @param #1 table containing search parameters:
+ *			- base: Base DN to search from.
+ *			- filter: Filter to apply to the search.
+ *			- scope: Scope of the search, one of:
+ *				- "base" for LDAP_SCOPE_BASE
+ *				- "one" for LDAP_SCOPE_ONELEVEL
+ *				- "sub" for LDAP_SCOPE_SUBTREE
+ *			- attrs: Table with attributes to retrieve.
+ *
+ * @return #1 Function to iterate over the result entries.
+ * @return #2 nil.
+ * @return #3 nil as first entry.
+ * The search result is defined as an upvalue of the iterator.
+ */
+static int lualdap_search_persistent(lua_State *L)
+{
+	conn_data		*conn = getconnection (L);
+
+	ldap_pchar_t		base;
+	ldap_pchar_t		filter;
+	char			*attrs[LUALDAP_MAX_ATTRS];
+	int			scope, rc;
+
+	LDAPControl		ctrl = {0}, *ctrls[2] = { &ctrl, NULL };
+	BerElement		*ber = NULL;
+	static char const	*sync_ctl_oid = LDAP_CONTROL_SYNC;
+
+	struct berval		*cookie = NULL;   /* Cookie for paging */
+	ngx_http_request_t	*r;
+	int			msgid;
+
+	if (!lua_istable (L, 2))
+		return luaL_error (L, LUALDAP_PREFIX "no connection socket");
+	if (!lua_istable (L, 3))
+		return luaL_error (L, LUALDAP_PREFIX "no search specification");
+	if (!get_attrs_param(L, attrs))
+		return 2;
+
+	/* Update internal connection to use new connection from pool */
+	update_socket(L, conn);
+
+	/* Sanity check */
+	r = ngx_http_lua_get_req(L);
+	if (r == NULL) return luaL_error(L, "no request found");
+
+	/* get other parameters */
+	base = (ldap_pchar_t)strtabparam(L, "base", NULL);
+	filter = (ldap_pchar_t)strtabparam(L, "filter", NULL);
+	scope = string2scope(L, strtabparam(L, "scope", NULL));
+
+	ber = ber_alloc_t(LBER_USE_DER);
+	if (ber == NULL) return luaL_error(L, LUALDAP_PREFIX "Failed allocating ber for sync control");
+
+	/*
+	 *	Might not necessarily have a cookie
+	 */
+	if (cookie) {
+		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, LUALDAP_PREFIX "Starting sync with cookie");
+
+		ber_printf(ber, "{eOb}", LDAP_SYNC_REFRESH_AND_PERSIST, cookie, false);
+	} else {
+		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, LUALDAP_PREFIX "Starting sync without cookie");
+		ber_printf(ber, "{eb}", LDAP_SYNC_REFRESH_AND_PERSIST, false);
+	}
+
+	rc = ber_flatten2(ber, &ctrls[0]->ldctl_value, 0);
+	if (rc < 0) {
+		ber_free(ber, 1);
+		return luaL_error(L, LUALDAP_PREFIX "Failed creating sync control");
+	}
+
+	memcpy(&ctrls[0]->ldctl_oid, &sync_ctl_oid, sizeof(ctrls[0]->ldctl_oid));
+	ctrl.ldctl_iscritical = 1;
+
+	rc = ldap_search_ext(conn->ld, base, scope, filter, attrs, 0,
+						 ctrls, NULL, NULL, 0, &msgid);
+
+	ber_free(ber, 1);
+
+	if (rc != LDAP_SUCCESS) return luaL_error(L, LUALDAP_PREFIX "%s", ldap_err2string(rc));
+
+	create_search(L, 1, msgid, cookie, SEARCH_TYPE_PERSISTENT);
+	lua_pushvalue (L, -1);
+	lua_pushcclosure(L, next_message, 1);	/* This is the ierator the caller can use to page out results */
+	lua_pushvalue(L, -2);
+	lua_remove(L, -3);
+
+	return 2;
+}
 
 /*
 ** Perform a search operation.
@@ -1157,6 +1251,7 @@ static int lualdap_createmeta (lua_State *L) {
 		{"modify", lualdap_modify},
 		{"rename", lualdap_rename},
 		{"search", lualdap_search},
+		{"search_persistent", lualdap_search_persistent},
 		{"init_fd", lualdap_init_fd},
 		{NULL, NULL}
 	};
