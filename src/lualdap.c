@@ -1004,7 +1004,7 @@ static int lualdap_search(lua_State *L)
 	char *attrs[LUALDAP_MAX_ATTRS];
 	int scope, attrsonly, rc, sizelimit, pagesize;
 	struct timeval st, *timeout;
-	LDAPControl *pageControl = NULL, *controls[2] = { NULL, NULL };
+	LDAPControl *pageControl = NULL, *ctrls[2] = { NULL, NULL };
 	struct berval *cookie = NULL;   /* Cookie for paging */
 	search_data_t * current_search;
 	ngx_http_request_t	  *r;
@@ -1045,11 +1045,11 @@ static int lualdap_search(lua_State *L)
 		}
 
 		/* Insert the control into a list to be passed to the search. */
-		controls[0] = pageControl;
+		ctrls[0] = pageControl;
 	}
 
-	rc = ldap_search_ext (conn->ld, base, scope, filter, attrs, attrsonly,
-		controls, NULL, timeout, sizelimit, &msgid);
+	rc = ldap_search_ext(conn->ld, base, scope, filter, attrs, attrsonly,
+						 ctrls, NULL, timeout, sizelimit, &msgid);
 	if (rc != LDAP_SUCCESS)
 		return luaL_error (L, LUALDAP_PREFIX"%s", ldap_err2string (rc));
 
