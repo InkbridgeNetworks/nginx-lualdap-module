@@ -84,13 +84,15 @@ typedef struct {
 
 
 /** LDAP search context information
+ *
+ * Represents either a oneshot search, as persistent search or a paged search.
  */
 typedef struct {
-} search_data;
 	int		conn;			//!< conn_data reference
 	int		msgid;			//!< Unique msgId associated with the search.
 	struct berval	*cookie;		//!< Cookie for paging or persistent searching
 	int		morePages:1;		//!< More pages are available on server.
+} search_data_t;
 
 /** LDAP attribute modification structure
  */
@@ -139,10 +141,11 @@ static conn_data *getconnection(lua_State *L)
 /**  Get a search object from the first upvalue position
  *
  */
-static search_data *getsearch(lua_State *L) {
+static search_data_t *getsearch(lua_State *L)
+{
 	/* don't need to check upvalue's integrity */
-	search_data *search = (search_data *)lua_touserdata(L, lua_upvalueindex(1));
-	luaL_argcheck(L,search->conn != LUA_NOREF, 1, LUALDAP_PREFIX"LDAP search is closed");
+	search_data_t *search = (search_data_t *)lua_touserdata(L, lua_upvalueindex(1));
+	luaL_argcheck(L,search->conn != LUA_NOREF, 1, LUALDAP_PREFIX "LDAP search is closed");
 	return search;
 }
 
@@ -237,12 +240,12 @@ static int booltabparam (lua_State *L, const char *name, int def) {
 ** Get the field named name as a boolean.
 ** The table MUST be at position 3.
 */
-static search_data *userdatatabparam (lua_State *L, const char *name) {
+static search_data_t *userdatatabparam (lua_State *L, const char *name) {
 	strgettable (L, name);
 	if (lua_isnil (L, -1))
 		return NULL;
 	else
-		return (search_data *)lua_touserdata (L, -1);
+		return (search_data_t *)lua_touserdata (L, -1);
 }
 
 
@@ -820,7 +823,7 @@ static int ldap_get_next_message(ngx_http_request_t *r, ngx_http_lua_socket_tcp_
  * @return #2 table with entry's attributes and values.
  */
 static int next_message(lua_State *L) {
-	search_data *search = getsearch (L);
+	search_data_t *search = getsearch (L);
 	conn_data *conn;
 	int rc;
 	ngx_http_lua_socket_tcp_upstream_t *u;
@@ -925,7 +928,7 @@ static int string2scope (lua_State *L, const char *s) {
 ** Close the search object.
 */
 static int lualdap_search_close(lua_State *L) {
-	search_data *search = (search_data *)luaL_checkudata (L, 1, LUALDAP_SEARCH_METATABLE);
+	search_data_t *search = (search_data_t *)luaL_checkudata (L, 1, LUALDAP_SEARCH_METATABLE);
 	luaL_argcheck (L, search!=NULL, 1, LUALDAP_PREFIX"LDAP search expected");
 	if (search->conn == LUA_NOREF)
 		return 0;
@@ -993,7 +996,8 @@ static struct timeval *get_timeout_param (lua_State *L, struct timeval *st) {
 ** @return #3 nil as first entry.
 ** The search result is defined as an upvalue of the iterator.
 */
-static int lualdap_search (lua_State *L) {
+static int lualdap_search(lua_State *L)
+{
 	conn_data *conn = getconnection (L);
 	ldap_pchar_t base;
 	ldap_pchar_t filter;
@@ -1002,7 +1006,7 @@ static int lualdap_search (lua_State *L) {
 	struct timeval st, *timeout;
 	LDAPControl *pageControl = NULL, *controls[2] = { NULL, NULL };
 	struct berval *cookie = NULL;   /* Cookie for paging */
-	search_data * current_search;
+	search_data_t * current_search;
 	ngx_http_request_t	  *r;
 	int msgid;
 
@@ -1085,10 +1089,10 @@ static int lualdap_conn_tostring (lua_State *L) {
 ** Return the name of the object's metatable.
 ** This function is used by `tostring'.
 */
-static int lualdap_search_tostring (lua_State *L) {
+static int lualdap_search_tostring(lua_State *L) {
 	char buff[100];
-	search_data *search = (search_data *)lua_touserdata (L, 1);
-	luaL_argcheck (L,search->conn!=LUA_NOREF,1,LUALDAP_PREFIX"LDAP search is closed");
+	search_data_t *search = (search_data_t *)lua_touserdata (L, 1);
+	luaL_argcheck(L,search->conn != LUA_NOREF,1,LUALDAP_PREFIX"LDAP search is closed");
 	if (search->conn == LUA_NOREF)
 		strcpy (buff, "closed");
 	else
@@ -1102,7 +1106,7 @@ static int lualdap_search_tostring (lua_State *L) {
 ** or false otherwise
 */
 static int lualdap_more_pages (lua_State *L) {
-	search_data *search = (search_data *)lua_touserdata (L, 1);
+	search_data_t *search = (search_data_t *)lua_touserdata (L, 1);
 	lua_pushboolean (L, search->morePages);
 	return 1;
 }

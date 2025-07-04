@@ -37,11 +37,11 @@ static int ngx_http_lua_socket_read_error_retval_handler(ngx_http_request_t *r, 
  * Forward declaration of functions in lualdap.c
  */
 static int faildirect (lua_State *L, const char *errmsg);
-static search_data *getsearch (lua_State *L);
+static search_data_t *getsearch (lua_State *L);
 static void lualdap_setmeta (lua_State *L, const char *name);
 static void set_attribs (lua_State *L, LDAP *ld, LDAPMessage *entry, int tab);
 static void push_dn (lua_State *L, LDAP *ld, LDAPMessage *entry);
-static void search_close (lua_State *L, search_data *search);
+static void search_close (lua_State *L, search_data_t *search);
 
 
 #if 0
@@ -302,7 +302,7 @@ ngx_http_lua_socket_read_error_retval_handler(ngx_http_request_t *r,
 static int
 ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tcp_upstream_t *u, lua_State *L)
 {
-	search_data *search = getsearch (L);
+	search_data_t *search = getsearch (L);
 	int n, ret;
 	conn_data *conn;
 	ngx_http_lua_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
