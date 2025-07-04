@@ -97,7 +97,7 @@ typedef struct {
 	int		msgid;			//!< Unique msgId associated with the search.
 	struct berval	*cookie;		//!< Cookie for paging or persistent searching
 	search_type_t	type;			//!< What type of search this is.
-	int		morePages:1;		//!< More pages are available on server.
+	int		morePages;		//!< More pages are available on server.
 } search_data_t;
 
 /** LDAP attribute modification structure
