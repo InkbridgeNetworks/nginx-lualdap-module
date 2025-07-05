@@ -6,3 +6,4 @@
 *.rock
 build
 openresty
+openresty-*.tar.gz
