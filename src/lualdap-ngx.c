@@ -328,7 +328,11 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 
 	// Check status of last call to ldap_result
 	if (op_ctx->ldap_rc == LDAP_RES_SEARCH_RESULT) { /* last message => nil */
-		ldap_parse_result(conn->ld, op_ctx->res, NULL, NULL, NULL, NULL, &returnedControls, 0);
+		int rc;
+
+		ldap_parse_result(conn->ld, op_ctx->res, &rc, NULL, NULL, NULL, &returnedControls, 0);
+
+		ngx_log_debug3(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "Search result %d (%s)", rc, ldap_err2string(rc));
 
 		if (search->cookie != NULL) {
 			ber_bvfree(search->cookie);

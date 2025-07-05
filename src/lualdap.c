@@ -1043,25 +1043,25 @@ static struct timeval *get_timeout_param (lua_State *L, struct timeval *st) {
  */
 static int lualdap_search_persistent(lua_State *L)
 {
-	conn_data		*conn = getconnection (L);
+	conn_data			*conn = getconnection (L);
 
 	ldap_pchar_t		base;
 	ldap_pchar_t		filter;
-	char			*attrs[LUALDAP_MAX_ATTRS];
-	int			scope, rc;
+	char				*attrs[LUALDAP_MAX_ATTRS];
+	int					scope, rc;
 
-	LDAPControl		ctrl = {0}, *ctrls[2] = { &ctrl, NULL };
-	BerElement		*ber = NULL;
+	LDAPControl			ctrl = {0}, *ctrls[2] = { &ctrl, NULL };
+	BerElement			*ber = NULL;
 	static char const	*sync_ctl_oid = LDAP_CONTROL_SYNC;
 
 	struct berval		*cookie = NULL;   /* Cookie for paging */
 	ngx_http_request_t	*r;
-	int			msgid;
+	int					msgid;
 
-	if (!lua_istable (L, 2))
+	if (!lua_istable(L, 2))
 		return luaL_error (L, LUALDAP_PREFIX "no connection socket");
-	if (!lua_istable (L, 3))
-		return luaL_error (L, LUALDAP_PREFIX "no search specification");
+	if (!lua_istable(L, 3))
+		return luaL_error(L, LUALDAP_PREFIX "no search specification");
 	if (!get_attrs_param(L, attrs))
 		return 2;
 
