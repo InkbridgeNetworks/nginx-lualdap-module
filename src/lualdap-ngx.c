@@ -850,20 +850,23 @@ static int lualdap_init_fd(lua_State *L) {
 	 */
 	{
 		struct berval cred;
-		struct beravl *cred_p = NULL;
 		int rc;
 
 		/*
-		 *  Not all mechs use a username and password
+		 *  Not all mechs use a username and password, if there's
+         *  no password provided, pass a zero length berval struct.
+		 *
+         *  This seems to be needed to allow EXTERNAL to succeed.
 		 */
 		if (password) {
 		    memcpy(&cred.bv_val, &password, sizeof(cred.bv_val));
 		    cred.bv_len = strlen(password);
-		    cred_p = &cred;
+		} else {
+			memset(cred, 0, sizeof(cred));
 		}
 
 		ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX "Binding LDAP connection");
-		rc = ldap_sasl_bind(conn->ld, user ? (const char *) user : "", sasl_mech, cred_p, NULL, NULL, &msgid);
+		rc = ldap_sasl_bind(conn->ld, user ? (const char *) user : "", sasl_mech, &cred, NULL, NULL, &msgid);
 		if (rc != LDAP_SUCCESS) {
 		    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX "Bind failed immediately");
 		    return faildirect(L, ldap_err2string(rc));
