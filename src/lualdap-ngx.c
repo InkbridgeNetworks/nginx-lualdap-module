@@ -846,20 +846,24 @@ static int lualdap_init_fd(lua_State *L) {
 	ngx_add_timer(u->peer.connection->read, 1000);
 
 	/*
-	 *  Bind the LDAP handle using credentials...
-	 *
-	 *  FIXME: We should support SASL binds with the EXTERNAL
-	 *  mech here.
+	 *  Bind the LDAP handle using (possibly with credentials)
 	 */
 	{
 		struct berval cred;
+		struct beravl *cred_p = NULL;
 		int rc;
 
-		memcpy(&cred.bv_val, &password, sizeof(cred.bv_val));
-		cred.bv_len = strlen(password);
+		/*
+		 *  Not all mechs use a username and password
+		 */
+		if (password) {
+		    memcpy(&cred.bv_val, &password, sizeof(cred.bv_val));
+		    cred.bv_len = strlen(password);
+		    cred_p = &cred;
+		}
 
 		ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX "Binding LDAP connection");
-		rc = ldap_sasl_bind(conn->ld, (const char *) user, sasl_mech, &cred, NULL, NULL, &msgid);
+		rc = ldap_sasl_bind(conn->ld, user ? (const char *) user : "", sasl_mech, cred_p, NULL, NULL, &msgid);
 		if (rc != LDAP_SUCCESS) {
 		    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX "Bind failed immediately");
 		    return faildirect(L, ldap_err2string(rc));
