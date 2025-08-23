@@ -862,7 +862,8 @@ static int lualdap_init_fd(lua_State *L) {
 		    memcpy(&cred.bv_val, &password, sizeof(cred.bv_val));
 		    cred.bv_len = strlen(password);
 		} else {
-			memset(cred, 0, sizeof(cred));
+			cred.bv_bal = "";
+			cred.bv_len = 0;
 		}
 
 		ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX "Binding LDAP connection");
