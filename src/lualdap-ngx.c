@@ -862,7 +862,7 @@ static int lualdap_init_fd(lua_State *L) {
 		    memcpy(&cred.bv_val, &password, sizeof(cred.bv_val));
 		    cred.bv_len = strlen(password);
 		} else {
-			cred.bv_bal = "";
+			cred.bv_val = "";
 			cred.bv_len = 0;
 		}
 
