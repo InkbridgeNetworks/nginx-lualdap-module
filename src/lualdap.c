@@ -78,7 +78,7 @@ typedef const char * ldap_pchar_t;
  */
 typedef struct {
 	int					version;   	//!< LDAP version
-	LDAP	  				*ld;      	//!< LDAP handle.
+	LDAP	  				*ld;	  	//!< LDAP handle.
 	ngx_peer_connection_t			conn;		//!< NGINX peer connection
 	ngx_http_lua_socket_tcp_upstream_t	*u;		//!< NGINX Socket object
 } conn_data;
@@ -104,8 +104,8 @@ typedef struct {
 /** LDAP attribute modification structure
  */
 typedef struct {
-	LDAPMod    	*attrs[LUALDAP_MAX_ATTRS + 1];
-	LDAPMod    	mods[LUALDAP_MAX_ATTRS];
+	LDAPMod		*attrs[LUALDAP_MAX_ATTRS + 1];
+	LDAPMod		mods[LUALDAP_MAX_ATTRS];
 	int		ai;
 	BerValue	*values[LUALDAP_ARRAY_VALUES_SIZE];
 	int		vi;
@@ -122,16 +122,16 @@ ngx_module_t  ngx_lualdap;
 ** Typical error situation.
 */
 static int faildirect (lua_State *L, const char *errmsg) {
-    lua_pushnil (L);
-    lua_pushstring (L, errmsg);
-    return 2;
+	lua_pushnil (L);
+	lua_pushstring (L, errmsg);
+	return 2;
 }
 
 
 /** Retrieve a connection object from the first stack position
  *
  * @note Does not modify the lua stack, just verifies that the first
- *       stack position is a valid connection object.
+ *	   stack position is a valid connection object.
  *
  * @return conn_data pointer to the connection object.
  */
@@ -1289,7 +1289,7 @@ static int lualdap_createmeta (lua_State *L) {
 	/*
 	 *	Sets the table of functions loaded with luaL_setfuncs
   	 *	as the index table.  This makes them callable from
-    	 *	the scope of the table to which the metatable is bound
+	 *	the scope of the table to which the metatable is bound
  	 */
 	lua_pushliteral(L, "__index");
 	lua_pushvalue(L, -2);
@@ -1369,7 +1369,7 @@ int luaopen_ngx_lualdap (lua_State *L) {
    	 */
 	lualdap_createmeta(L);
 	lua_newtable(L);
-    luaL_setfuncs(L, lualdap, 0);
+	luaL_setfuncs(L, lualdap, 0);
 
 	set_info(L);
 
