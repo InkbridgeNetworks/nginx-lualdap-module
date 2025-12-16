@@ -18,7 +18,6 @@ debug() {
 error() {
     echo "$*" >&2
 }
-
 usage() {
     cat <<EOF
 Usage: $0 [-v] [-t <N>] <command> [mode]
@@ -123,8 +122,7 @@ nginx_start() {
             error "Invalid mode: $MODE"
             usage
             ;;
-    esac
-}
+    esac}
 
 nginx_stop() {
     debug "Stopping nginx"
@@ -161,22 +159,7 @@ nginx_stop() {
 nginx_reload() {
     debug "Reloading nginx"
 
-    if [ ! -f "$PID_FILE" ]; then
-        error "No PID file found at $PID_FILE"
-        exit 1
-    fi
-
-    PID=$(cat "$PID_FILE")
-    debug "Found PID: $PID"
-
-    if ! kill -0 "$PID" 2>/dev/null; then
-        error "No running nginx to reload"
-        rm -f "$PID_FILE"
-        exit 1
-    fi
-
-    kill -HUP "$PID"
-    debug "Sent HUP to nginx (PID $PID)"
+    exec "$NGINX_BIN" -c "$NGINX_CONF" -s reload
 }
 
 nginx_status() {
