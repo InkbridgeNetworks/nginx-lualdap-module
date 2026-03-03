@@ -122,7 +122,8 @@ nginx_start() {
             error "Invalid mode: $MODE"
             usage
             ;;
-    esac}
+    esac
+}
 
 nginx_stop() {
     debug "Stopping nginx"
