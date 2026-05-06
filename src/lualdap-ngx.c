@@ -15,6 +15,7 @@ typedef struct {
 	int msgid;
 	LDAPMessage *res;
 	int ldap_rc;
+	ngx_msec_t timeout;		/* saved for re-arming on intermediate messages */
 } op_ctx_t;
 
 static void ldap_search_handler(ngx_http_request_t *r, ngx_http_lua_socket_tcp_upstream_t *u);
@@ -387,6 +388,21 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			search_close (L, search);
 			ret = 0;
 			break;
+		case LDAP_RES_INTERMEDIATE:
+			/* RFC 4533 syncInfoValue sent at the refresh-to-persist transition.
+			 * Discard it and re-arm the read so the iterator keeps blocking. */
+			ldap_msgfree(op_ctx->res);
+			op_ctx->res = NULL;
+			conn->conn.connection->read->handler = ldap_socket_handler;
+			if (op_ctx->timeout > 0) ngx_add_timer(conn->conn.connection->read, op_ctx->timeout);
+			u->read_event_handler = ldap_search_handler;
+			coctx->cleanup = ngx_http_lua_coctx_cleanup;
+			coctx->data = op_ctx;
+			u->read_co_ctx = coctx;
+			u->read_waiting = 1;
+			u->read_prepare_retvals = ldap_search_receive_retval_handler;
+			return NGX_AGAIN;
+
 		default:
 			ldap_msgfree(op_ctx->res);
 			op_ctx->res = NULL; /* For debugging */
@@ -550,10 +566,19 @@ ngx_http_lua_coctx_cleanup(void *data)
 
 	op_ctx = coctx->data;
 	if (op_ctx == NULL) {
-	return;
+		return;
 	}
 
-//	ngx_http_lua_socket_tcp_finalize(u->request, u);
+	/* Tell the server to stop the operation (e.g. persistent search abandoned when SSE closes). */
+	if (op_ctx->conn && op_ctx->conn->ld) {
+		ldap_abandon(op_ctx->conn->ld, op_ctx->msgid);
+	}
+	if (op_ctx->res) {
+		ldap_msgfree(op_ctx->res);
+		op_ctx->res = NULL;
+	}
+	ngx_free(op_ctx);
+	coctx->data = NULL;
 }
 
 static void

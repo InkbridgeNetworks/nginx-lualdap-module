@@ -475,6 +475,7 @@ static int result_closure(lua_State *L) {
 		dd("next_message read failed: %d", (int) u->ft_type);
 		rc = ngx_http_lua_socket_tcp_receive_retval_handler(r, u, L);
 		dd("tcp receive retval returned: %d", (int) rc);
+		ngx_free(op_ctx);
 		return rc;
 	}
 
@@ -557,7 +558,7 @@ static int lualdap_close(lua_State *L) {
 	luaL_argcheck(L, conn!=NULL, 1, LUALDAP_PREFIX"LDAP connection expected");
 	if (conn->ld == NULL) /* already closed */
 		return 0;
-//	ldap_unbind(conn->ld);
+	ldap_unbind_ext(conn->ld, NULL, NULL);
 	conn->ld = NULL;
 	lua_pushnumber (L, 1);
 	return 1;
@@ -805,8 +806,9 @@ static void search_close(lua_State *L, search_data_t *search)
 		conn = lua_touserdata(L, -1);
 		lua_pop(L, 1);
 
-		/* Free up resources on the serve allocated to paginated or persistent search */
-		ldap_abandon(conn->ld, search->msgid);
+		/* Free up resources on the server allocated to paginated or persistent search.
+		 * conn->ld may be NULL if the connection was closed before the search was GC'd. */
+		if (conn->ld) ldap_abandon(conn->ld, search->msgid);
 	}
 
 	case SEARCH_TYPE_NORMAL:
@@ -866,6 +868,7 @@ static int next_message(lua_State *L) {
 
 	lua_rawgeti (L, LUA_REGISTRYINDEX, search->conn);
 	conn = (conn_data *)lua_touserdata(L, -1); /* get connection */
+	lua_pop(L, 1);
 
 	const int timeout = luaL_optnumber(L, 1, 1000);
 
@@ -873,12 +876,13 @@ static int next_message(lua_State *L) {
 
 	conn->conn.connection->write->handler = ldap_socket_handler;
 	conn->conn.connection->read->handler = ldap_socket_handler;
-	ngx_add_timer(conn->conn.connection->read, timeout);
+	if (timeout > 0) ngx_add_timer(conn->conn.connection->read, timeout);
 
 	op_ctx = ngx_alloc(sizeof(op_ctx_t), r->connection->log);
 	op_ctx->u = u;
 	op_ctx->conn = conn;
 	op_ctx->msgid = search->msgid;
+	op_ctx->timeout = timeout;
 
 	switch (rc = ldap_get_next_message_with_ctx(r, u, op_ctx)) {
 	case NGX_ERROR:
@@ -886,16 +890,36 @@ static int next_message(lua_State *L) {
 		ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "next_message read failed: %d", (int) u->ft_type);
 		rc = ngx_http_lua_socket_tcp_receive_retval_handler(r, u, L);
 		dd("tcp receive retval returned: %d", (int) rc);
+		ngx_free(op_ctx);
 		return rc;
 
-	case NGX_OK:
+	case NGX_OK: {
+		int nret;
 		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "lua tcp socket receive done in a single run");
 
 		ctx = ngx_http_get_module_ctx(r, ngx_http_lua_module);
 		coctx = ctx->cur_co_ctx;
 		coctx->data = op_ctx;
 
-		return ldap_search_receive_retval_handler(r, u, L);
+		nret = ldap_search_receive_retval_handler(r, u, L);
+		if (nret == NGX_AGAIN) {
+			/*
+			 * INTERMEDIATE message was already buffered: retval handler consumed it,
+			 * re-armed the LDAP socket, and set u->read_waiting=1.  We still need to
+			 * yield so nginx can continue serving other events while we wait for the
+			 * next LDAP message.  Set the HTTP write handler so flush/output works
+			 * while we are suspended, then yield with an empty stack.
+			 */
+			if (ctx->entered_content_phase) {
+				r->write_event_handler = ngx_http_lua_content_wev_handler;
+			} else {
+				r->write_event_handler = ngx_http_core_run_phases;
+			}
+			lua_settop(L, 0);
+			return lua_yield(L, 0);
+		}
+		return nret;
+	}
 
 	case NGX_AGAIN:
 		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "waiting asynchronously for search result");
@@ -926,6 +950,7 @@ static int next_message(lua_State *L) {
 		}
 
 		ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "yielding from %s", __FUNCTION__);
+		lua_settop(L, 0);
 		return lua_yield(L, 0);
 	}
 }
