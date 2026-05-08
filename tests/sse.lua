@@ -228,4 +228,42 @@ function m:TestRenameAppearsAsEntryEvent()
     self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = SSE_DST_DN }))
 end
 
+local UUID_PAT = '(%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x)'
+
+-- Delete notifications carry no regular attributes, so set_attribs cannot
+-- supply entryUUID. The only path that can is the Sync State Control extracted
+-- by push_sync_state_uuid. This test isolates that path: capture the UUID from
+-- the initial-sync entry, delete the object, then assert the same UUID appears
+-- in the resulting notification.
+function m:TestEntryUUIDOnDelete()
+    local DN = 'cn=ci_sse_delete_uuid,dc=example,dc=org'
+
+    self:sendRequest('GET', 'ldap-add?' .. qs({ dn = DN }))
+    self:finally(function(self)
+        self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = DN }))
+    end)
+
+    local tcp = open_sse('ldap-sse?' .. qs({
+        filter = '(cn=ci_sse_delete_uuid)',
+        attrs  = 'entryUUID',
+    }))
+    local ev1 = read_sse_event(tcp)
+    luaunit.assertEquals(ev1, 'ready')
+
+    -- Initial sync delivers the entry with its UUID via set_attribs.
+    local ev2, data2 = read_sse_event(tcp)
+    luaunit.assertEquals(ev2, 'entry')
+    local initial_uuid = data2:match('"entryUUID":"' .. UUID_PAT .. '"')
+    luaunit.assertNotNil(initial_uuid, 'no UUID in initial-sync entry: ' .. data2)
+
+    self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = DN }))
+
+    tcp:settimeout(2)
+    local ev3, data3 = read_sse_event(tcp)
+    tcp:close()
+
+    luaunit.assertEquals(ev3, 'entry')
+    luaunit.assertStrContains(data3, '"entryUUID":"' .. initial_uuid .. '"')
+end
+
 return m

@@ -134,13 +134,13 @@ static void
 push_sync_state_uuid(lua_State *L, LDAP *ld, LDAPMessage *entry, int tab)
 {
 	LDAPControl   **ctrls = NULL;
-	int             i;
+	int             i, rc;
 	BerElement     *ber;
 	ber_int_t       sync_state;
 	struct berval   uuid_bv = {0, NULL};
 
-	ldap_get_entry_controls(ld, entry, &ctrls);
-	if (!ctrls)
+	rc = ldap_get_entry_controls(ld, entry, &ctrls);
+	if (rc != LDAP_SUCCESS || !ctrls)
 		return;
 
 	for (i = 0; ctrls[i]; i++) {
