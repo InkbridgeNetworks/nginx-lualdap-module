@@ -542,15 +542,22 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 		switch (msgtype) {
 		case LDAP_RES_SEARCH_ENTRY: {
 			LDAPMessage *entry = ldap_first_entry (conn->ld, msg);
+			int          attrs_idx;
+
 			push_dn(L, conn->ld, entry);
 			lua_newtable(L);
-			set_attribs(L, conn->ld, entry, lua_gettop (L));
+			attrs_idx = lua_gettop(L);
+			set_attribs(L, conn->ld, entry, attrs_idx);
 			ret = 2;
 			/* Persistent searches carry a Sync State Control on every entry;
-			 * surface its state/UUID/cookie as a third return value. */
+			 * surface its state/UUID/cookie as a third return value, and drop
+			 * entryUUID from attrs since it now lives at the top level. */
 			if (search->type == SEARCH_TYPE_PERSISTENT
-			    && push_sync_meta(L, conn->ld, entry, search))
+			    && push_sync_meta(L, conn->ld, entry, search)) {
 				ret = 3;
+				lua_pushnil(L);
+				lua_setfield(L, attrs_idx, "entryUUID");
+			}
 			break;
 		}
 /*No reference to LDAP_RES_SEARCH_REFERENCE on MSDN. Maybe there is a replacement to it?*/

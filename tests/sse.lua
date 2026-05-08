@@ -145,14 +145,32 @@ function m:TestEntryUUIDNotInsideAttrs()
     luaunit.assertNotStrContains(attrs, 'entryUUID')
 end
 
+-- The persistent search auto-appends entryUUID to whatever attrs the caller
+-- requested, and strips it from the response attrs table. So even with an
+-- explicit narrow attrs request, entryUUID lives only at the top level.
+function m:TestEntryUUIDStrippedWhenCallerRequestsAttrs()
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)', attrs = 'ou' }))
+    read_sse_event(tcp)
+    local ev, data = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev, 'entry')
+    -- Top-level UUID is there
+    luaunit.assertNotNil(string.match(data, '"entryUUID":"%x'))
+    -- attrs has 'ou' (what the caller asked for) but NOT entryUUID
+    local attrs = data:match('"attrs":({.-})')
+    luaunit.assertNotNil(attrs, 'no attrs object: ' .. data)
+    luaunit.assertStrContains(attrs, '"ou"')
+    luaunit.assertNotStrContains(attrs, 'entryUUID')
+end
+
 function m:TestSyncStatePresentOnInitialSync()
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
     read_sse_event(tcp)
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'entry')
-    -- Initial-sync entries arrive with state=add in refreshAndPersist mode
-    luaunit.assertStrContains(data, '"syncState":"add"')
+    -- Initial-sync entries arrive with op=add in refreshAndPersist mode
+    luaunit.assertStrContains(data, '"syncOp":"add"')
 end
 
 function m:TestRenameEventCount()
@@ -271,7 +289,7 @@ function m:TestEntryUUIDOnDelete()
 
     luaunit.assertEquals(ev3, 'entry')
     luaunit.assertStrContains(data3, '"entryUUID":"' .. initial_uuid .. '"')
-    luaunit.assertStrContains(data3, '"syncState":"delete"')
+    luaunit.assertStrContains(data3, '"syncOp":"delete"')
     -- The refreshDelete intermediate fires between initial sync and the
     -- delete notification, so the cookie has been advanced and stamped.
     local body_cookie = data3:match('"syncCookie":"([^"]+)"')

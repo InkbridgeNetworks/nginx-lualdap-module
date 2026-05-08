@@ -1024,6 +1024,29 @@ static search_data_t *create_search(lua_State *L, int conn_index, int msgid, str
 }
 
 /*
+** Ensure `name` is present in the NULL-terminated attrs[] array. If attrs is
+** "all by default" (attrs[0] == NULL), expand to ["*", name, NULL] so the
+** server still returns user attributes alongside the named operational one.
+** Silently no-ops if there is no room in the array.
+*/
+static void ensure_attr_in_list(char *attrs[], const char *name, int max)
+{
+	int i;
+	for (i = 0; i < max && attrs[i]; i++) {
+		if (strcasecmp(attrs[i], name) == 0) return;
+	}
+	if (i >= max - 1) return;  /* full; leave alone */
+	if (i == 0) {
+		attrs[0] = "*";
+		attrs[1] = (char *)name;
+		attrs[2] = NULL;
+		return;
+	}
+	attrs[i] = (char *)name;
+	attrs[i + 1] = NULL;
+}
+
+/*
 ** Fill in the attrs array, according to the attrs parameter.
 */
 static int get_attrs_param (lua_State *L, char *attrs[]) {
@@ -1098,6 +1121,13 @@ static int lualdap_search_persistent(lua_State *L)
 		return luaL_error(L, LUALDAP_PREFIX "no search specification");
 	if (!get_attrs_param(L, attrs))
 		return 2;
+
+	/* Persistent searches always need entryUUID as a regular attribute.
+	 * It is operational and so omitted unless explicitly requested; we want
+	 * it in the entry as a fallback in case Sync State Control parsing ever
+	 * fails. The persistent-search entry handler then strips it from attrs
+	 * before returning, since metadata lives at the top level. */
+	ensure_attr_in_list(attrs, "entryUUID", LUALDAP_MAX_ATTRS);
 
 	/* Update internal connection to use new connection from pool */
 	update_socket(L, conn);
