@@ -7,3 +7,4 @@
 build
 openresty
 openresty-*.tar.gz
+ci/nginx/conf.d/default.conf

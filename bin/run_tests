@@ -1,0 +1,16 @@
+#!/usr/bin/env lua
+package.path = './tests/?.lua;' .. package.path
+
+local luaunit = require('luaunit')
+local tester = require('dapman-http-unit')
+
+for file in io.popen('ls -1 tests/'):lines() do
+    local stripped = file:match("^(.-)%.lua$")
+    -- Skip legacy *_test.lua files
+    if stripped and not stripped:match("_test$") then
+        local testName = 'Test' .. stripped:gsub("^%l", string.upper)
+        _G[testName] = tester.injectTestFunctions(require(stripped))
+    end
+end
+
+os.exit(luaunit.LuaUnit.run())

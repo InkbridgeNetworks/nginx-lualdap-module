@@ -1,21 +1,14 @@
 #!/bin/sh
 set -e
 
-container_name="subman-openldap"
+container_name="lualdap-nginx-test"
 ldap_image="bitnamilegacy/openldap:latest"
+ldap_port="${LDAP_PORT:-1389}"
 
 # LDAP connection configuration
 base_dn="dc=example,dc=org"
 bind_dn="cn=manager,${base_dn}"
-config_bind_dn="cn=manager,cn=config"
 password="password"
-
-# Command wrappers
-ldapsearch="ldapsearch -o ldif-wrap=no -v -D '${bind_dn}' -w '${password}'"
-ldapsearch_config="ldapsearch -o ldif-wrap=no -v -D '${config_bind_dn}' -w '${password}' -b 'cn=config'"
-ldapadd="ldapadd -v -D ${bind_dn} -w ${password}"
-ldapadd_config="ldapadd -v -D ${config_bind_dn} -w ${password}"
-ldapmodify_config="ldapmodify -v -D ${config_bind_dn} -w ${password}"
 
 # Verbosity
 verbose=0
@@ -32,13 +25,13 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     *)
-      echo "Usage: $0 [-v] {start|stop|restart|status}"
+      echo "Usage: $0 [-v] {start|stop|restart|status|shell}"
       exit 1
       ;;
   esac
 done
 
-[ -z "$cmd" ] && { echo "No command provided. Usage: $0 [-v] {start|stop|restart|status}"; exit 1; }
+[ -z "$cmd" ] && { echo "No command provided. Usage: $0 [-v] {start|stop|restart|status|shell}"; exit 1; }
 
 debug() {
   if [ "$verbose" -eq 1 ]; then
@@ -51,18 +44,13 @@ start_container() {
   if [ -z "$existing_image" ]; then
     debug "Starting container '$container_name' with image '$ldap_image'"
     docker run -d --name "$container_name" \
-      -p 389:389 \
-      -e LDAP_PORT_NUMBER=389 \
+      -p "${ldap_port}:1389" \
       -e LDAP_ROOT="${base_dn}" \
       -e LDAP_ADMIN_USERNAME=manager \
       -e LDAP_ADMIN_PASSWORD="${password}" \
-      -e LDAP_CONFIG_ADMIN_ENABLED=yes \
-      -e LDAP_CONFIG_ADMIN_USERNAME=manager \
-      -e LDAP_CONFIG_ADMIN_PASSWORD="${password}" \
-      -e LDAP_USERS=api \
-      -e LDAP_PASSWORDS=apipass \
+      -e LDAP_USERS=testuser \
+      -e LDAP_PASSWORDS=testpass \
       -e LDAP_ENABLE_SYNCPROV=true \
-      -e BITNAMI_DEBUG=true \
       "$ldap_image"
   elif [ "$existing_image" != "$ldap_image" ]; then
     echo "Container '$container_name' exists with image '$existing_image'; replacing with '$ldap_image'"
@@ -74,25 +62,12 @@ start_container() {
   fi
 
   echo "Waiting for LDAP to become available..."
-  while ! eval "$ldapsearch -b '${base_dn}'" > /dev/null 2>&1; do
+  while ! ldapsearch -H "ldap://127.0.0.1:${ldap_port}" \
+      -D "${bind_dn}" -w "${password}" \
+      -b "${base_dn}" -s base > /dev/null 2>&1; do
     sleep 1
   done
   echo "LDAP is available"
-
-  for ldif in $(ls devel/etc/openldap/ldif | sort); do
-    debug "Adding ${ldif} -- $ldapmodify_config -f devel/etc/openldap/ldif/${ldif}"
-    $ldapmodify_config -f "devel/etc/openldap/ldif/${ldif}"
-  done
-
-  for schema in submodules/freeradius-server/doc/schemas/ldap/openldap/*.ldif; do
-    eval "$ldapadd_config -f \"$schema\""
-  done
-
-  for schema in share/openldap/schema/*.ldif; do
-    eval "$ldapadd_config -f \"$schema\""
-  done
-
-  eval "$ldapadd -c -f \"share/openldap/base/init.ldif\""
 }
 
 stop_container() {

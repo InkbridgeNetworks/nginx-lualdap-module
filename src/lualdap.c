@@ -99,6 +99,7 @@ typedef struct {
 	struct berval	*cookie;		//!< Cookie for paging or persistent searching
 	search_type_t	type;			//!< What type of search this is.
 	int		morePages;		//!< More pages are available on server.
+	unsigned	want_entry_uuid:1;	//!< entryUUID was explicitly requested; extract from Sync State Control.
 } search_data_t;
 
 /** LDAP attribute modification structure
@@ -1091,6 +1092,14 @@ static int lualdap_search_persistent(lua_State *L)
 	if (!get_attrs_param(L, attrs))
 		return 2;
 
+	bool want_uuid = false;
+	for (int ai = 0; attrs[ai]; ai++) {
+		if (strcasecmp(attrs[ai], "entryUUID") == 0) {
+			want_uuid = true;
+			break;
+		}
+	}
+
 	/* Update internal connection to use new connection from pool */
 	update_socket(L, conn);
 
@@ -1134,7 +1143,8 @@ static int lualdap_search_persistent(lua_State *L)
 
 	if (rc != LDAP_SUCCESS) return luaL_error(L, LUALDAP_PREFIX "%s", ldap_err2string(rc));
 
-	create_search(L, 1, msgid, cookie, SEARCH_TYPE_PERSISTENT);
+	search_data_t *search = create_search(L, 1, msgid, cookie, SEARCH_TYPE_PERSISTENT);
+	search->want_entry_uuid = want_uuid;
 	lua_pushvalue (L, -1);
 	lua_pushcclosure(L, next_message, 1);	/* This is the ierator the caller can use to page out results */
 	lua_pushvalue(L, -2);

@@ -119,6 +119,95 @@ static char const *nginx_rcode_to_str(int rc)
 }
 #endif
 
+static const char hex_digits[] = "0123456789abcdef";
+
+/*
+ * Extracts the entryUUID from the RFC 4533 Sync State Control attached to a
+ * SearchResultEntry and sets attrs["entryUUID"] = "<uuid-string>" in the
+ * already-pushed attrs table at stack index `tab`.  No-ops silently if the
+ * control is absent or malformed.
+ *
+ * SyncStateValue ::= SEQUENCE { state ENUMERATED, entryUUID OCTET STRING(16),
+ *                                cookie OCTET STRING OPTIONAL }
+ */
+static void
+push_sync_state_uuid(lua_State *L, LDAP *ld, LDAPMessage *entry, int tab)
+{
+	LDAPControl   **ctrls = NULL;
+	int             i;
+	BerElement     *ber;
+	ber_int_t       sync_state;
+	struct berval   uuid_bv = {0, NULL};
+
+	ldap_get_entry_controls(ld, entry, &ctrls);
+	if (!ctrls)
+		return;
+
+	for (i = 0; ctrls[i]; i++) {
+		if (strcmp(ctrls[i]->ldctl_oid, LDAP_CONTROL_SYNC_STATE) != 0)
+			continue;
+
+		ber = ber_init(&ctrls[i]->ldctl_value);
+		if (!ber) break;
+
+		if (ber_scanf(ber, "{eo}", &sync_state, &uuid_bv) == LBER_ERROR
+		    || uuid_bv.bv_len != 16) {
+			ber_free(ber, 1);
+			if (uuid_bv.bv_val) ber_memfree(uuid_bv.bv_val);
+			break;
+		}
+		ber_free(ber, 1);
+
+		unsigned char *u = (unsigned char *)uuid_bv.bv_val;
+		char uuid_str[37] = {
+			[0]  = hex_digits[u[0] >> 4],
+			[1]  = hex_digits[u[0] & 0xf],
+			[2]  = hex_digits[u[1] >> 4],
+			[3]  = hex_digits[u[1] & 0xf],
+			[4]  = hex_digits[u[2] >> 4],
+			[5]  = hex_digits[u[2] & 0xf],
+			[6]  = hex_digits[u[3] >> 4],
+			[7]  = hex_digits[u[3] & 0xf],
+			[8]  = '-',
+			[9]  = hex_digits[u[4] >> 4],
+			[10] = hex_digits[u[4] & 0xf],
+			[11] = hex_digits[u[5] >> 4],
+			[12] = hex_digits[u[5] & 0xf],
+			[13] = '-',
+			[14] = hex_digits[u[6] >> 4],
+			[15] = hex_digits[u[6] & 0xf],
+			[16] = hex_digits[u[7] >> 4],
+			[17] = hex_digits[u[7] & 0xf],
+			[18] = '-',
+			[19] = hex_digits[u[8] >> 4],
+			[20] = hex_digits[u[8] & 0xf],
+			[21] = hex_digits[u[9] >> 4],
+			[22] = hex_digits[u[9] & 0xf],
+			[23] = '-',
+			[24] = hex_digits[u[10] >> 4],
+			[25] = hex_digits[u[10] & 0xf],
+			[26] = hex_digits[u[11] >> 4],
+			[27] = hex_digits[u[11] & 0xf],
+			[28] = hex_digits[u[12] >> 4],
+			[29] = hex_digits[u[12] & 0xf],
+			[30] = hex_digits[u[13] >> 4],
+			[31] = hex_digits[u[13] & 0xf],
+			[32] = hex_digits[u[14] >> 4],
+			[33] = hex_digits[u[14] & 0xf],
+			[34] = hex_digits[u[15] >> 4],
+			[35] = hex_digits[u[15] & 0xf],
+			[36] = '\0',
+		};
+		ber_memfree(uuid_bv.bv_val);
+
+		lua_pushstring(L, "entryUUID");
+		lua_pushstring(L, uuid_str);
+		lua_rawset(L, tab);
+		break;
+	}
+	ldap_controls_free(ctrls);
+}
+
 static int
 ldap_operation_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tcp_upstream_t *u, lua_State *L)
 {
@@ -370,6 +459,8 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			push_dn(L, conn->ld, entry);
 			lua_newtable(L);
 			set_attribs(L, conn->ld, entry, lua_gettop (L));
+			if (search->want_entry_uuid)
+				push_sync_state_uuid(L, conn->ld, entry, lua_gettop(L));
 			ret = 2; /* two return values */
 			break;
 		}

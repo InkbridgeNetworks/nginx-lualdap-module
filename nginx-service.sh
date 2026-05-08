@@ -4,6 +4,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-$SCRIPT_DIR/build}"
 NGINX_BIN="${NGINX_BIN:-$BUILD_DIR/nginx/sbin/nginx}"
 NGINX_CONF="${NGINX_CONF:-$SCRIPT_DIR/ci/nginx/nginx.conf}"
+NGINX_PORT="${NGINX_PORT:-8090}"
+CONF_DIR="${SCRIPT_DIR}/ci/nginx/conf.d"
 LOG_DIR="${LOG_DIR:-$BUILD_DIR/test/log}"
 RUN_DIR="${RUN_DIR:-$BUILD_DIR/test/run}"
 PID_FILE="${PID_FILE:-$RUN_DIR/nginx.pid}"
@@ -89,6 +91,17 @@ nginx_check_paths() {
         error "$NGINX_CONF not found"
         exit 1
     fi
+}
+
+nginx_generate_conf() {
+    local tmpl="${CONF_DIR}/default.conf.template"
+    local out="${CONF_DIR}/default.conf"
+    if [ ! -f "$tmpl" ]; then
+        error "Missing $tmpl"
+        exit 1
+    fi
+    NGINX_PORT="$NGINX_PORT" envsubst '${NGINX_PORT}' < "$tmpl" > "$out"
+    debug "Generated $out (NGINX_PORT=$NGINX_PORT)"
 }
 
 nginx_prepare_dirs() {
@@ -189,6 +202,7 @@ main() {
     case "$ACTION" in
         start)
             nginx_check_paths
+            nginx_generate_conf
             nginx_start
             ;;
         stop)

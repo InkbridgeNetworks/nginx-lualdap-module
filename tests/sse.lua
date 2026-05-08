@@ -1,0 +1,231 @@
+local luaunit = require('luaunit')
+local socket  = require('socket')
+
+local m = {}
+
+local NGINX_HOST = os.getenv('NGINX_HOST') or '127.0.0.1'
+local NGINX_PORT = tonumber(os.getenv('NGINX_PORT') or os.getenv('TEST_PORT') or '8090')
+
+local function qs(params)
+    local parts = {}
+    for k, v in pairs(params) do
+        parts[#parts + 1] = k .. "=" .. tostring(v)
+    end
+    return table.concat(parts, '&')
+end
+
+-- Open a raw TCP connection using HTTP/1.0 so nginx streams SSE without
+-- chunked transfer encoding (lua_http10_buffering off handles this).
+-- Returns (tcp, response_headers_table).
+local function open_sse(path_and_query)
+    local tcp = socket.tcp()
+    tcp:settimeout(5)
+    local ok, err = tcp:connect(NGINX_HOST, NGINX_PORT)
+    luaunit.assertNil(err, 'SSE connect: ' .. tostring(err))
+    tcp:send('GET /' .. path_and_query .. ' HTTP/1.0\r\nHost: ' .. NGINX_HOST .. '\r\n\r\n')
+    -- Collect HTTP response headers before the blank line.
+    local headers = {}
+    while true do
+        local line = tcp:receive('*l')
+        if not line or line:gsub('\r', '') == '' then break end
+        local name, val = line:match('^([^:]+):%s*(.-)%s*$')
+        if name then
+            headers[name:lower()] = val
+        end
+    end
+    return tcp, headers
+end
+
+-- Read one SSE event (event + data lines) from the raw TCP socket.
+-- Returns event_type (string), data (string), or nil on EOF/timeout.
+local function read_sse_event(tcp)
+    local event_type, data_val
+    while true do
+        local line, err = tcp:receive('*l')
+        if not line then return nil, nil end  -- EOF or timeout
+        line = line:gsub('\r', '')
+        if line == '' then
+            -- Blank line = end of event; return if we have something
+            if event_type or data_val then
+                return event_type or 'message', data_val or ''
+            end
+        elseif line:sub(1, 7) == 'event: ' then
+            event_type = line:sub(8)
+        elseif line:sub(1, 6) == 'data: ' then
+            data_val = line:sub(7)
+        end
+    end
+end
+
+function m:TestReadyEvent()
+    local tcp = open_sse('ldap-sse')
+    local ev, data = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev, 'ready')
+    luaunit.assertNotNil(data)
+end
+
+function m:TestReadyEventDataIsEmptyObject()
+    local tcp = open_sse('ldap-sse')
+    local ev, data = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev, 'ready')
+    luaunit.assertEquals(data, '{}')
+end
+
+function m:TestEntryEventAfterReady()
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(objectClass=*)' }))
+    local ev1 = read_sse_event(tcp)
+    luaunit.assertEquals(ev1, 'ready')
+    local ev2, data = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev2, 'entry')
+    luaunit.assertStrContains(data, '"dn"')
+end
+
+function m:TestEntryDataContainsDn()
+    -- ou=users always exists in the Bitnami tree.
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
+    read_sse_event(tcp)  -- ready
+    local ev, data = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev, 'entry')
+    luaunit.assertStrContains(data, 'ou=users')
+end
+
+function m:TestEntryDataContainsAttrs()
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
+    read_sse_event(tcp)  -- ready
+    local ev, data = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev, 'entry')
+    luaunit.assertStrContains(data, '"attrs"')
+end
+
+function m:TestErrorEventOnBadPort()
+    local tcp = open_sse('ldap-sse?' .. qs({ port = 1 }))
+    local ev = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev, 'error')
+end
+
+function m:TestResponseHeadersContentType()
+    local _, headers = open_sse('ldap-sse')
+    luaunit.assertStrContains(headers['content-type'] or '', 'text/event-stream')
+end
+
+function m:TestResponseHeadersCacheControl()
+    local _, headers = open_sse('ldap-sse')
+    luaunit.assertStrContains(headers['cache-control'] or '', 'no-cache')
+end
+
+function m:TestEntryUUIDPresentWhenRequested()
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)', attrs = 'entryUUID' }))
+    read_sse_event(tcp)  -- ready
+    local ev, data = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev, 'entry')
+    luaunit.assertStrContains(data, '"entryUUID"')
+    -- sanity check it looks like a UUID
+    luaunit.assertNotNil(string.match(data, '"entryUUID":"%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x"'))
+end
+
+function m:TestEntryUUIDAbsentWhenNotRequested()
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
+    read_sse_event(tcp)  -- ready
+    local ev, data = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev, 'entry')
+    luaunit.assertNotStrContains(data, '"entryUUID"')
+end
+
+function m:TestEntryUUIDCaseInsensitive()
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)', attrs = 'entryuuid' }))
+    read_sse_event(tcp)  -- ready
+    local ev, data = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev, 'entry')
+    luaunit.assertStrContains(data, '"entryUUID"')
+end
+
+function m:TestRenameEventCount()
+    local SSE_SRC_DN  = 'cn=ci_sse_evcount_src,dc=example,dc=org'
+    local SSE_DST_RDN = 'cn=ci_sse_evcount_dst'
+    local SSE_DST_DN  = SSE_DST_RDN .. ',dc=example,dc=org'
+
+    self:sendRequest('GET', 'ldap-add?' .. qs({ dn = SSE_SRC_DN }))
+    self:finally(function(self)
+        self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = SSE_SRC_DN }))
+        self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = SSE_DST_DN }))
+    end)
+
+    -- OR filter matches both names so we catch every notification the server
+    -- emits during the rename (RFC 4533 modify-in-scope vs delete+add pair).
+    local filter = '(|(cn=ci_sse_evcount_src)(cn=ci_sse_evcount_dst))'
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = filter }))
+    local ev1 = read_sse_event(tcp)
+    luaunit.assertEquals(ev1, 'ready')
+
+    -- Drain initial-sync entry for the src name.
+    local ev2 = read_sse_event(tcp)
+    luaunit.assertEquals(ev2, 'entry')
+
+    self:sendRequest('GET', 'ldap-rename?' .. qs({
+        dn           = SSE_SRC_DN,
+        newrdn       = SSE_DST_RDN,
+        deleteoldrdn = 1,
+    }))
+
+    -- Short timeout: server pushes notifications synchronously so 1 s is ample.
+    tcp:settimeout(1)
+    local events = {}
+    while true do
+        local ev, data = read_sse_event(tcp)
+        if not ev then break end
+        events[#events + 1] = { ev = ev, data = data }
+    end
+    tcp:close()
+
+    -- Hypothesis: one modify event with the new DN.  If OpenLDAP sends a
+    -- delete+add pair instead, this fails and we update the assertion.
+    luaunit.assertEquals(#events, 1)
+    luaunit.assertStrContains(events[1].data, 'ci_sse_evcount_dst')
+
+    self:finallyPop()
+    self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = SSE_DST_DN }))
+end
+
+function m:TestRenameAppearsAsEntryEvent()
+    local SSE_SRC_DN  = 'cn=ci_sse_rename_src,dc=example,dc=org'
+    local SSE_DST_RDN = 'cn=ci_sse_rename_dst'
+    local SSE_DST_DN  = SSE_DST_RDN .. ',dc=example,dc=org'
+
+    self:sendRequest('GET', 'ldap-add?' .. qs({ dn = SSE_SRC_DN }))
+    self:finally(function(self)
+        self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = SSE_SRC_DN }))
+        self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = SSE_DST_DN }))
+    end)
+
+    -- Filter on the destination name: initial sync returns zero matches.
+    -- After the rename the entry enters scope and the server pushes it.
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(cn=ci_sse_rename_dst)' }))
+    local ev1 = read_sse_event(tcp)
+    luaunit.assertEquals(ev1, 'ready')
+
+    self:sendRequest('GET', 'ldap-rename?' .. qs({
+        dn           = SSE_SRC_DN,
+        newrdn       = SSE_DST_RDN,
+        deleteoldrdn = 1,
+    }))
+
+    local ev2, data = read_sse_event(tcp)
+    tcp:close()
+
+    luaunit.assertEquals(ev2, 'entry')
+    luaunit.assertStrContains(data, 'ci_sse_rename_dst')
+
+    self:finallyPop()
+    self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = SSE_DST_DN }))
+end
+
+return m
