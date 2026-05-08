@@ -6,6 +6,14 @@ local m = {}
 local NGINX_HOST = os.getenv('NGINX_HOST') or '127.0.0.1'
 local NGINX_PORT = tonumber(os.getenv('NGINX_PORT') or os.getenv('TEST_PORT') or '8090')
 
+local function url_encode(s)
+    return (tostring(s):gsub('[^%w._~-]', function(c)
+        return string.format('%%%02X', string.byte(c))
+    end))
+end
+
+-- Most callers need raw values (LDAP filters with parens, DNs with =,
+-- etc.). Only encode when the value would otherwise break parsing.
 local function qs(params)
     local parts = {}
     for k, v in pairs(params) do
@@ -296,6 +304,60 @@ function m:TestEntryUUIDOnDelete()
     luaunit.assertNotNil(body_cookie, 'no syncCookie in delete event: ' .. data3)
     -- The same cookie must appear in the SSE id: line for resumption.
     luaunit.assertEquals(id3, body_cookie)
+end
+
+-- Resumption: capture a cookie from a delete event on a fresh sync, then
+-- reconnect with that cookie. The server must accept the cookie and skip
+-- the refresh phase, so on the second connection we should see new changes
+-- without the entries that already existed at cookie time being replayed
+-- as syncOp=add.
+function m:TestPersistentSearchResumesFromCookie()
+    local DN_A = 'cn=ci_resume_a,dc=example,dc=org'
+    local DN_B = 'cn=ci_resume_b,dc=example,dc=org'
+    self:finally(function(self)
+        self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = DN_A }))
+        self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = DN_B }))
+    end)
+
+    self:sendRequest('GET', 'ldap-add?' .. qs({ dn = DN_A }))
+
+    -- First connection: full refresh, then trigger a delete to force the
+    -- server to advance the cookie.
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(cn=ci_resume_a)' }))
+    luaunit.assertEquals(read_sse_event(tcp), 'ready')
+    local ev1 = read_sse_event(tcp)
+    luaunit.assertEquals(ev1, 'entry')
+
+    self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = DN_A }))
+
+    tcp:settimeout(2)
+    local ev2, data2, id2 = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev2, 'entry')
+    luaunit.assertStrContains(data2, '"syncOp":"delete"')
+    luaunit.assertNotNil(id2, 'no cookie captured from delete event')
+    local cookie = id2
+
+    -- Reconnect with the cookie. Filter widened so a freshly-added DN_B
+    -- enters scope after the resume, exercising change detection.
+    self:sendRequest('GET', 'ldap-add?' .. qs({ dn = DN_B }))
+
+    -- Cookie has '=' and ',' so we percent-encode it; other params are
+    -- LDAP filter syntax and stay raw.
+    local tcp2 = open_sse('ldap-sse?'
+        .. 'filter=(|(cn=ci_resume_a)(cn=ci_resume_b))'
+        .. '&cookie=' .. url_encode(cookie))
+    luaunit.assertEquals(read_sse_event(tcp2), 'ready')
+
+    -- The server must replay DN_B (added after the cookie). DN_A was
+    -- deleted before the cookie so it should NOT be replayed as add.
+    tcp2:settimeout(3)
+    local ev3, data3 = read_sse_event(tcp2)
+    tcp2:close()
+
+    luaunit.assertEquals(ev3, 'entry')
+    luaunit.assertStrContains(data3, 'ci_resume_b')
+    luaunit.assertNotStrContains(data3, 'ci_resume_a')
 end
 
 return m

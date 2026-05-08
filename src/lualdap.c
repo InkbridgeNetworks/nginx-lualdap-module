@@ -1111,7 +1111,8 @@ static int lualdap_search_persistent(lua_State *L)
 	BerElement			*ber = NULL;
 	static char const	*sync_ctl_oid = LDAP_CONTROL_SYNC;
 
-	struct berval		*cookie = NULL;   /* Cookie for paging */
+	struct berval		 cookie_storage;
+	struct berval		*cookie = NULL;   /* Resume cookie from a prior sync, if any */
 	ngx_http_request_t	*r;
 	int					msgid;
 
@@ -1140,6 +1141,18 @@ static int lualdap_search_persistent(lua_State *L)
 	base = (ldap_pchar_t)strtabparam(L, "base", NULL);
 	filter = (ldap_pchar_t)strtabparam(L, "filter", NULL);
 	scope = string2scope(L, strtabparam(L, "scope", NULL));
+
+	/* Optional resume cookie. When provided, the server skips the refresh
+	 * phase (or sends "present" markers for unchanged entries) and only
+	 * ships changes since the cookie's CSN. */
+	{
+		const char *c = strtabparam(L, "cookie", NULL);
+		if (c) {
+			cookie_storage.bv_val = (char *)c;
+			cookie_storage.bv_len = strlen(c);
+			cookie = &cookie_storage;
+		}
+	}
 
 	ber = ber_alloc_t(LBER_USE_DER);
 	if (ber == NULL) return luaL_error(L, LUALDAP_PREFIX "Failed allocating ber for sync control");
@@ -1172,7 +1185,13 @@ static int lualdap_search_persistent(lua_State *L)
 
 	if (rc != LDAP_SUCCESS) return luaL_error(L, LUALDAP_PREFIX "%s", ldap_err2string(rc));
 
-	create_search(L, 1, msgid, cookie, SEARCH_TYPE_PERSISTENT);
+	{
+		search_data_t *s = create_search(L, 1, msgid, NULL, SEARCH_TYPE_PERSISTENT);
+		/* Seed latest_cookie with the resume cookie so any "present" markers
+		 * or pre-checkpoint entries are stamped with at least the input
+		 * cookie until the server issues a fresher one. */
+		if (cookie) s->latest_cookie = ber_bvdup(cookie);
+	}
 	lua_pushvalue (L, -1);
 	lua_pushcclosure(L, next_message, 1);	/* This is the ierator the caller can use to page out results */
 	lua_pushvalue(L, -2);
