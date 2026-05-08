@@ -37,22 +37,23 @@ local function open_sse(path_and_query)
 end
 
 -- Read one SSE event (event + data lines) from the raw TCP socket.
--- Returns event_type (string), data (string), or nil on EOF/timeout.
+-- Returns event_type, data, id_val (id_val is nil if no id: line), or nil on EOF/timeout.
 local function read_sse_event(tcp)
-    local event_type, data_val
+    local event_type, data_val, id_val
     while true do
         local line, err = tcp:receive('*l')
-        if not line then return nil, nil end  -- EOF or timeout
+        if not line then return nil, nil, nil end
         line = line:gsub('\r', '')
         if line == '' then
-            -- Blank line = end of event; return if we have something
-            if event_type or data_val then
-                return event_type or 'message', data_val or ''
+            if event_type or data_val or id_val then
+                return event_type or 'message', data_val or '', id_val
             end
         elseif line:sub(1, 7) == 'event: ' then
             event_type = line:sub(8)
         elseif line:sub(1, 6) == 'data: ' then
             data_val = line:sub(7)
+        elseif line:sub(1, 4) == 'id: ' then
+            id_val = line:sub(5)
         end
     end
 end
@@ -119,33 +120,39 @@ function m:TestResponseHeadersCacheControl()
     luaunit.assertStrContains(headers['cache-control'] or '', 'no-cache')
 end
 
-function m:TestEntryUUIDPresentWhenRequested()
-    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)', attrs = 'entryUUID' }))
-    read_sse_event(tcp)  -- ready
-    local ev, data = read_sse_event(tcp)
-    tcp:close()
-    luaunit.assertEquals(ev, 'entry')
-    luaunit.assertStrContains(data, '"entryUUID"')
-    -- sanity check it looks like a UUID
-    luaunit.assertNotNil(string.match(data, '"entryUUID":"%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x"'))
-end
-
-function m:TestEntryUUIDAbsentWhenNotRequested()
+-- entryUUID is now a metadata field at the top level of the SSE record,
+-- sourced from the Sync State Control on every persistent-search entry, so
+-- it is always present regardless of the attrs request list.
+function m:TestEntryUUIDAlwaysPresent()
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
     read_sse_event(tcp)  -- ready
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'entry')
-    luaunit.assertNotStrContains(data, '"entryUUID"')
+    luaunit.assertNotNil(string.match(data, '"entryUUID":"%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x"'))
 end
 
-function m:TestEntryUUIDCaseInsensitive()
-    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)', attrs = 'entryuuid' }))
-    read_sse_event(tcp)  -- ready
+function m:TestEntryUUIDNotInsideAttrs()
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
+    read_sse_event(tcp)
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'entry')
-    luaunit.assertStrContains(data, '"entryUUID"')
+    -- entryUUID is metadata; attrs holds real attributes only.
+    -- When attrs is not requested, the server omits entryUUID from attrs.
+    local attrs = data:match('"attrs":({.-})')
+    luaunit.assertNotNil(attrs, 'no attrs object in payload: ' .. data)
+    luaunit.assertNotStrContains(attrs, 'entryUUID')
+end
+
+function m:TestSyncStatePresentOnInitialSync()
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
+    read_sse_event(tcp)
+    local ev, data = read_sse_event(tcp)
+    tcp:close()
+    luaunit.assertEquals(ev, 'entry')
+    -- Initial-sync entries arrive with state=add in refreshAndPersist mode
+    luaunit.assertStrContains(data, '"syncState":"add"')
 end
 
 function m:TestRenameEventCount()
@@ -259,11 +266,18 @@ function m:TestEntryUUIDOnDelete()
     self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = DN }))
 
     tcp:settimeout(2)
-    local ev3, data3 = read_sse_event(tcp)
+    local ev3, data3, id3 = read_sse_event(tcp)
     tcp:close()
 
     luaunit.assertEquals(ev3, 'entry')
     luaunit.assertStrContains(data3, '"entryUUID":"' .. initial_uuid .. '"')
+    luaunit.assertStrContains(data3, '"syncState":"delete"')
+    -- The refreshDelete intermediate fires between initial sync and the
+    -- delete notification, so the cookie has been advanced and stamped.
+    local body_cookie = data3:match('"syncCookie":"([^"]+)"')
+    luaunit.assertNotNil(body_cookie, 'no syncCookie in delete event: ' .. data3)
+    -- The same cookie must appear in the SSE id: line for resumption.
+    luaunit.assertEquals(id3, body_cookie)
 end
 
 return m

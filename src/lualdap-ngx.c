@@ -122,90 +122,176 @@ static char const *nginx_rcode_to_str(int rc)
 static const char hex_digits[] = "0123456789abcdef";
 
 /*
- * Extracts the entryUUID from the RFC 4533 Sync State Control attached to a
- * SearchResultEntry and sets attrs["entryUUID"] = "<uuid-string>" in the
- * already-pushed attrs table at stack index `tab`.  No-ops silently if the
- * control is absent or malformed.
- *
- * SyncStateValue ::= SEQUENCE { state ENUMERATED, entryUUID OCTET STRING(16),
- *                                cookie OCTET STRING OPTIONAL }
+ * RFC 4533 SyncStateValue ::= SEQUENCE {
+ *     state ENUMERATED { present(0), add(1), modify(2), delete(3) },
+ *     entryUUID OCTET STRING(16),
+ *     cookie    syncCookie OPTIONAL
+ * }
  */
+static const char *sync_state_name(ber_int_t s)
+{
+	switch (s) {
+	case 0: return "present";
+	case 1: return "add";
+	case 2: return "modify";
+	case 3: return "delete";
+	default: return NULL;
+	}
+}
+
+static void format_uuid(unsigned char *u, char out[37])
+{
+	char buf[37] = {
+		[0]  = hex_digits[u[0]  >> 4], [1]  = hex_digits[u[0]  & 0xf],
+		[2]  = hex_digits[u[1]  >> 4], [3]  = hex_digits[u[1]  & 0xf],
+		[4]  = hex_digits[u[2]  >> 4], [5]  = hex_digits[u[2]  & 0xf],
+		[6]  = hex_digits[u[3]  >> 4], [7]  = hex_digits[u[3]  & 0xf],
+		[8]  = '-',
+		[9]  = hex_digits[u[4]  >> 4], [10] = hex_digits[u[4]  & 0xf],
+		[11] = hex_digits[u[5]  >> 4], [12] = hex_digits[u[5]  & 0xf],
+		[13] = '-',
+		[14] = hex_digits[u[6]  >> 4], [15] = hex_digits[u[6]  & 0xf],
+		[16] = hex_digits[u[7]  >> 4], [17] = hex_digits[u[7]  & 0xf],
+		[18] = '-',
+		[19] = hex_digits[u[8]  >> 4], [20] = hex_digits[u[8]  & 0xf],
+		[21] = hex_digits[u[9]  >> 4], [22] = hex_digits[u[9]  & 0xf],
+		[23] = '-',
+		[24] = hex_digits[u[10] >> 4], [25] = hex_digits[u[10] & 0xf],
+		[26] = hex_digits[u[11] >> 4], [27] = hex_digits[u[11] & 0xf],
+		[28] = hex_digits[u[12] >> 4], [29] = hex_digits[u[12] & 0xf],
+		[30] = hex_digits[u[13] >> 4], [31] = hex_digits[u[13] & 0xf],
+		[32] = hex_digits[u[14] >> 4], [33] = hex_digits[u[14] & 0xf],
+		[34] = hex_digits[u[15] >> 4], [35] = hex_digits[u[15] & 0xf],
+		[36] = '\0',
+	};
+	memcpy(out, buf, 37);
+}
+
+/* Replace search->latest_cookie with a freshly-allocated copy of bv. */
 static void
-push_sync_state_uuid(lua_State *L, LDAP *ld, LDAPMessage *entry, int tab)
+store_latest_cookie(search_data_t *search, struct berval *bv)
+{
+	if (!bv || !bv->bv_val || bv->bv_len == 0) return;
+	if (search->latest_cookie) ber_bvfree(search->latest_cookie);
+	search->latest_cookie = ber_bvdup(bv);
+}
+
+/*
+ * Push a sync metadata table for a SearchResultEntry onto the Lua stack and,
+ * as a side effect, advance search->latest_cookie if the entry's Sync State
+ * Control carries a fresh cookie. The pushed syncCookie is always the
+ * cumulative latest known cookie (which may have been set by an earlier
+ * intermediate message), not just whatever this entry's control happened to
+ * carry. Returns 1 on success, 0 if the control is absent or malformed.
+ */
+static int
+push_sync_meta(lua_State *L, LDAP *ld, LDAPMessage *entry, search_data_t *search)
 {
 	LDAPControl   **ctrls = NULL;
-	int             i, rc;
+	int             i, rc, pushed = 0;
 	BerElement     *ber;
 	ber_int_t       sync_state;
 	struct berval   uuid_bv = {0, NULL};
+	struct berval   cookie_bv = {0, NULL};
+	ber_tag_t       tag;
+	char            uuid_str[37];
 
 	rc = ldap_get_entry_controls(ld, entry, &ctrls);
 	if (rc != LDAP_SUCCESS || !ctrls)
-		return;
+		return 0;
 
 	for (i = 0; ctrls[i]; i++) {
+		const char *state_name;
+
 		if (strcmp(ctrls[i]->ldctl_oid, LDAP_CONTROL_SYNC_STATE) != 0)
 			continue;
 
 		ber = ber_init(&ctrls[i]->ldctl_value);
-		if (!ber) break;
-
-		if (ber_scanf(ber, "{eo}", &sync_state, &uuid_bv) == LBER_ERROR
-		    || uuid_bv.bv_len != 16) {
-			ber_free(ber, 1);
-			if (uuid_bv.bv_val) ber_memfree(uuid_bv.bv_val);
+		if (!ber)
 			break;
+
+		if (ber_scanf(ber, "{eo" /*}*/, &sync_state, &uuid_bv) == LBER_ERROR
+		    || uuid_bv.bv_len != 16) {
+			if (uuid_bv.bv_val) ber_memfree(uuid_bv.bv_val);
+			ber_free(ber, 1);
+			break;
+		}
+		tag = ber_peek_tag(ber, &cookie_bv.bv_len);
+		if (tag == LBER_OCTETSTRING) {
+			if (ber_scanf(ber, "o", &cookie_bv) != LBER_ERROR) {
+				store_latest_cookie(search, &cookie_bv);
+			}
+			if (cookie_bv.bv_val) ber_memfree(cookie_bv.bv_val);
 		}
 		ber_free(ber, 1);
 
-		unsigned char *u = (unsigned char *)uuid_bv.bv_val;
-		char uuid_str[37] = {
-			[0]  = hex_digits[u[0] >> 4],
-			[1]  = hex_digits[u[0] & 0xf],
-			[2]  = hex_digits[u[1] >> 4],
-			[3]  = hex_digits[u[1] & 0xf],
-			[4]  = hex_digits[u[2] >> 4],
-			[5]  = hex_digits[u[2] & 0xf],
-			[6]  = hex_digits[u[3] >> 4],
-			[7]  = hex_digits[u[3] & 0xf],
-			[8]  = '-',
-			[9]  = hex_digits[u[4] >> 4],
-			[10] = hex_digits[u[4] & 0xf],
-			[11] = hex_digits[u[5] >> 4],
-			[12] = hex_digits[u[5] & 0xf],
-			[13] = '-',
-			[14] = hex_digits[u[6] >> 4],
-			[15] = hex_digits[u[6] & 0xf],
-			[16] = hex_digits[u[7] >> 4],
-			[17] = hex_digits[u[7] & 0xf],
-			[18] = '-',
-			[19] = hex_digits[u[8] >> 4],
-			[20] = hex_digits[u[8] & 0xf],
-			[21] = hex_digits[u[9] >> 4],
-			[22] = hex_digits[u[9] & 0xf],
-			[23] = '-',
-			[24] = hex_digits[u[10] >> 4],
-			[25] = hex_digits[u[10] & 0xf],
-			[26] = hex_digits[u[11] >> 4],
-			[27] = hex_digits[u[11] & 0xf],
-			[28] = hex_digits[u[12] >> 4],
-			[29] = hex_digits[u[12] & 0xf],
-			[30] = hex_digits[u[13] >> 4],
-			[31] = hex_digits[u[13] & 0xf],
-			[32] = hex_digits[u[14] >> 4],
-			[33] = hex_digits[u[14] & 0xf],
-			[34] = hex_digits[u[15] >> 4],
-			[35] = hex_digits[u[15] & 0xf],
-			[36] = '\0',
-		};
-		ber_memfree(uuid_bv.bv_val);
+		state_name = sync_state_name(sync_state);
+		format_uuid((unsigned char *)uuid_bv.bv_val, uuid_str);
 
+		lua_newtable(L);
+		if (state_name) {
+			lua_pushstring(L, "state");
+			lua_pushstring(L, state_name);
+			lua_rawset(L, -3);
+		}
 		lua_pushstring(L, "entryUUID");
 		lua_pushstring(L, uuid_str);
-		lua_rawset(L, tab);
+		lua_rawset(L, -3);
+		if (search->latest_cookie) {
+			lua_pushstring(L, "syncCookie");
+			lua_pushlstring(L, search->latest_cookie->bv_val,
+					search->latest_cookie->bv_len);
+			lua_rawset(L, -3);
+		}
+		ber_memfree(uuid_bv.bv_val);
+		pushed = 1;
 		break;
 	}
 	ldap_controls_free(ctrls);
+	return pushed;
+}
+
+/*
+ * Parse an RFC 4533 syncInfoValue (the value of an LDAP_RES_INTERMEDIATE
+ * with OID LDAP_SYNC_INFO) and update search->latest_cookie if a cookie is
+ * present in any of the four CHOICE variants (newcookie, refreshDelete,
+ * refreshPresent, syncIdSet). Silently no-ops on malformed input.
+ */
+static void
+update_cookie_from_sync_info(search_data_t *search, struct berval *infoval)
+{
+	BerElement    *ber;
+	ber_tag_t      top_tag, peek_tag;
+	ber_len_t      len;
+	struct berval  cookie_bv = {0, NULL};
+
+	if (!infoval || !infoval->bv_val) return;
+
+	ber = ber_init(infoval);
+	if (!ber) return;
+
+	top_tag = ber_peek_tag(ber, &len);
+	switch (top_tag & 0x1f) {  /* tag number, ignoring class+constructed bits */
+	case 0:  /* newcookie [0]: the value IS the cookie OCTET STRING */
+		if (ber_scanf(ber, "o", &cookie_bv) != LBER_ERROR) {
+			store_latest_cookie(search, &cookie_bv);
+			if (cookie_bv.bv_val) ber_memfree(cookie_bv.bv_val);
+		}
+		break;
+	case 1:  /* refreshDelete  [1] SEQUENCE { cookie? syncCookie, refreshDone? BOOL } */
+	case 2:  /* refreshPresent [2] SEQUENCE { cookie? syncCookie, refreshDone? BOOL } */
+	case 3:  /* syncIdSet      [3] SEQUENCE { cookie? syncCookie, refreshDeletes? BOOL, syncUUIDs SET } */
+		if (ber_scanf(ber, "{" /*}*/) == LBER_ERROR) break;
+		peek_tag = ber_peek_tag(ber, &len);
+		if (peek_tag == LBER_OCTETSTRING) {
+			if (ber_scanf(ber, "o", &cookie_bv) != LBER_ERROR) {
+				store_latest_cookie(search, &cookie_bv);
+				if (cookie_bv.bv_val) ber_memfree(cookie_bv.bv_val);
+			}
+		}
+		break;
+	}
+	ber_free(ber, 1);
 }
 
 static int
@@ -459,9 +545,12 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			push_dn(L, conn->ld, entry);
 			lua_newtable(L);
 			set_attribs(L, conn->ld, entry, lua_gettop (L));
-			if (search->want_entry_uuid)
-				push_sync_state_uuid(L, conn->ld, entry, lua_gettop(L));
-			ret = 2; /* two return values */
+			ret = 2;
+			/* Persistent searches carry a Sync State Control on every entry;
+			 * surface its state/UUID/cookie as a third return value. */
+			if (search->type == SEARCH_TYPE_PERSISTENT
+			    && push_sync_meta(L, conn->ld, entry, search))
+				ret = 3;
 			break;
 		}
 /*No reference to LDAP_RES_SEARCH_REFERENCE on MSDN. Maybe there is a replacement to it?*/
@@ -479,9 +568,19 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			search_close (L, search);
 			ret = 0;
 			break;
-		case LDAP_RES_INTERMEDIATE:
-			/* RFC 4533 syncInfoValue sent at the refresh-to-persist transition.
-			 * Discard it and re-arm the read so the iterator keeps blocking. */
+		case LDAP_RES_INTERMEDIATE: {
+			/* RFC 4533 syncInfoMessage carries cookie checkpoints (newcookie /
+			 * refreshDelete / refreshPresent / syncIdSet). Extract the cookie
+			 * if any and stash it on the search state so the next entry event
+			 * carries it. The message itself is then discarded and we re-arm. */
+			char          *oid = NULL;
+			struct berval *value = NULL;
+			if (ldap_parse_intermediate(conn->ld, op_ctx->res, &oid, &value, NULL, 0) == LDAP_SUCCESS
+			    && oid && strcmp(oid, LDAP_SYNC_INFO) == 0) {
+				update_cookie_from_sync_info(search, value);
+			}
+			if (oid) ldap_memfree(oid);
+			if (value) ber_bvfree(value);
 			ldap_msgfree(op_ctx->res);
 			op_ctx->res = NULL;
 			conn->conn.connection->read->handler = ldap_socket_handler;
@@ -493,6 +592,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			u->read_waiting = 1;
 			u->read_prepare_retvals = ldap_search_receive_retval_handler;
 			return NGX_AGAIN;
+		}
 
 		default:
 			ldap_msgfree(op_ctx->res);
