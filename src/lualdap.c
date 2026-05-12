@@ -1289,8 +1289,6 @@ static int lualdap_search_persistent(lua_State *L)
 	int					msgid;
 	int					opts_idx = 7;
 	int					has_opts;
-	int					saved_deref = LDAP_DEREF_NEVER;
-	int					never_deref = LDAP_DEREF_NEVER;
 
 	if (!lua_istable(L, 2))
 		return luaL_error (L, LUALDAP_PREFIX "no connection socket");
@@ -1365,22 +1363,12 @@ static int lualdap_search_persistent(lua_State *L)
 	*ctrls_p = NULL;
 
 	/*
-	 * Force derefAliases = neverDerefAliases for the duration of this
-	 * search. The syncprov overlay rejects syncrepl SearchRequests with
-	 * any other deref value ("illegal value for derefAliases", protocol
-	 * error 2). LDAP_OPT_DEREF is session-wide on the handle, so save
-	 * and restore the caller's setting after the request is queued.
-	 * ldap_search_ext is non-blocking - it just serialises and sends -
-	 * so restoring immediately after the call is correct; the value is
-	 * only consulted by libldap when building the request PDU.
+	 * derefAliases is forced to neverDerefAliases at connection setup
+	 * (init_fd), so no per-search override is needed - syncprov's
+	 * 'illegal value for derefAliases' protocol error can't fire here.
 	 */
-	ldap_get_option(conn->ld, LDAP_OPT_DEREF, &saved_deref);
-	ldap_set_option(conn->ld, LDAP_OPT_DEREF, &never_deref);
-
 	rc = ldap_search_ext(conn->ld, base, scope, filter, attrs, 0,
 						 ctrls, NULL, NULL, 0, &msgid);
-
-	ldap_set_option(conn->ld, LDAP_OPT_DEREF, &saved_deref);
 
 	ber_free(ber, 1);
 

@@ -1127,6 +1127,20 @@ static int lualdap_init_fd(lua_State *L) {
 		return faildirect(L, LUALDAP_PREFIX"Error setting LDAP version");
 	}
 
+	/*
+	 *  Force derefAliases = neverDerefAliases for every search on this
+	 *  handle. lualdap's API doesn't expose alias resolution, and the
+	 *  syncprov overlay rejects syncrepl SearchRequests with any other
+	 *  deref value ('illegal value for derefAliases', protocol error 2).
+	 *  Without this override the handle inherits whatever LDAP_OPT_DEREF
+	 *  libldap pulled out of ldap.conf, which silently breaks every
+	 *  persistent search the moment that file says 'DEREF always'.
+	 */
+	{
+		int deref = LDAP_DEREF_NEVER;
+		ldap_set_option(conn->ld, LDAP_OPT_DEREF, &deref);
+	}
+
 	{
 		Sockbuf *sb;
 
