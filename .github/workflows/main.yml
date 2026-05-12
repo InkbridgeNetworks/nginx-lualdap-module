@@ -241,6 +241,10 @@ jobs:
           # the dev default Lua 5.4); set it from lua_bin so a future
           # version bump touches only `lua_version` above.
           LUA54: /usr/bin/${{ env.lua_bin }}
+          # dapman-http-unit defaults to port 8080; nginx in this suite
+          # listens on 8090. run-tests.sh exports this for the dev path;
+          # we bypass that wrapper here so set it explicitly.
+          TEST_PORT: 8090
         run: |
           eval "$(luarocks --lua-version ${{ env.lua_version }} path)"
           # --verbose makes luaunit emit per-test status as it runs rather
