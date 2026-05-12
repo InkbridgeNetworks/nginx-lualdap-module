@@ -264,8 +264,9 @@ push_sync_meta(lua_State *L, LDAP *ld, LDAPMessage *entry, search_data_t *search
  * the syncrepl transition from refresh phase to persist phase: after
  * this point, every change to a matching entry produces a per-entry
  * notification. Callers use this to emit a "streamBegins" marker up to
- * Lua so application code (e.g. SSE endpoints) can fire a "ready"
- * signal to clients without racing against the refresh phase.
+ * Lua so application code (e.g. SSE endpoints) can let clients gate
+ * subsequent change ops on the marker without racing against the
+ * refresh phase.
  *
  * Silently no-ops on malformed input.
  */
@@ -615,14 +616,13 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			 *
 			 * refreshDelete/refreshPresent with refreshDone=TRUE signals the
 			 * end of the syncrepl refresh phase and entry into persist mode.
-			 * We surface this to Lua as a synthetic marker — (nil, nil,
-			 * {syncOp="streamBegins"}) — so callers (e.g. the SSE endpoint)
-			 * can defer client-visible "ready" signalling until after the
-			 * server is in persist mode. Without this, a client that issues
-			 * a change immediately after the search opens races against the
-			 * still-in-progress refresh phase and the change may be folded
-			 * into refreshDone's queue-drain instead of producing a
-			 * per-entry notification.
+			 * We surface this to Lua as a synthetic marker - (nil, nil,
+			 * {syncOp="streamBegins"}) - so callers (e.g. the SSE endpoint)
+			 * can gate client-visible change ops on the marker. Without
+			 * this, a client that issues a change immediately after the
+			 * search opens races against the still-in-progress refresh
+			 * phase and the change may be folded into refreshDone's
+			 * queue-drain instead of producing a per-entry notification.
 			 */
 			char          *oid = NULL;
 			struct berval *value = NULL;

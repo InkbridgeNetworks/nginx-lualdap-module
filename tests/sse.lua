@@ -81,7 +81,7 @@ end
 function m:TestStreamBeginsEvent()
     -- Filter matches nothing so the refresh phase has zero entries and
     -- streamBegins is the first event we see.
-    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(cn=__no_match_for_ready__)' }))
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(cn=__no_match_for_stream_begins__)' }))
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'streamBegins')
@@ -89,7 +89,7 @@ function m:TestStreamBeginsEvent()
 end
 
 function m:TestStreamBeginsEventDataIsEmptyObject()
-    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(cn=__no_match_for_ready__)' }))
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(cn=__no_match_for_stream_begins__)' }))
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'streamBegins')
