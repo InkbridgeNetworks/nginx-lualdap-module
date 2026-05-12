@@ -145,7 +145,6 @@ end
 -- it is always present regardless of the attrs request list.
 function m:TestEntryUUIDAlwaysPresent()
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
-    read_sse_event(tcp)  -- ready
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'entry')
@@ -154,7 +153,6 @@ end
 
 function m:TestEntryUUIDNotInsideAttrs()
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
-    read_sse_event(tcp)
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'entry')
@@ -170,7 +168,6 @@ end
 -- explicit narrow attrs request, entryUUID lives only at the top level.
 function m:TestEntryUUIDStrippedWhenCallerRequestsAttrs()
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)', attrs = 'ou' }))
-    read_sse_event(tcp)
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'entry')
@@ -185,7 +182,6 @@ end
 
 function m:TestSyncStatePresentOnInitialSync()
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
-    read_sse_event(tcp)
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'entry')
