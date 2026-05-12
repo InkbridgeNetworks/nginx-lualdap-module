@@ -120,6 +120,42 @@ jobs:
         working-directory: openresty-${{ env.openresty_version }}
         run: sudo make install -j ${{ steps.cpu-cores.outputs.count }}
 
+      - name: Tests - Install Lua and test dependencies
+        run: |
+          ${{ env.apt-install }} lua5.4 liblua5.4-dev luarocks ldap-utils
+          sudo luarocks --lua-version 5.4 install --only-deps lualdap-nginx-tests-dev-1.rockspec
+
+      #
+      #  bin/run_tests requires `dapman-http-unit` from the parent SubMan
+      #  project (it lives outside this submodule). Pull it in via a sparse
+      #  checkout and place it on the test runner's package path.
+      #
+      - name: Tests - Checkout dapman-http-unit from parent SubMan
+        uses: actions/checkout@v4
+        with:
+          repository: InkbridgeNetworks/SubMan
+          path: subman-checkout
+          sparse-checkout: src/http-unit
+          sparse-checkout-cone-mode: false
+
+      - name: Tests - Stage dapman-http-unit
+        run: ln -sf "${{ github.workspace }}/subman-checkout/src/http-unit/init.lua" tests/dapman-http-unit.lua
+
+      #
+      #  ./run-tests.sh starts the LDAP container itself (via
+      #  ldap-container.sh, which uses `docker run`) and then nginx via
+      #  ./nginx-service.sh. The runner image is privileged so docker-in-
+      #  docker works. We override NGINX_BIN to point at the system install
+      #  rather than the script's default ./build/nginx/sbin/nginx.
+      #
+      - name: Tests - Run lualdap test suite
+        env:
+          NGINX_BIN: /usr/local/openresty/nginx/sbin/nginx
+          LUA54: /usr/bin/lua5.4
+        run: |
+          eval "$(luarocks --lua-version 5.4 path)"
+          ./run-tests.sh
+
       - name: "On Failure - Start tmate"
         uses: mxschmitt/action-tmate@v3
         with:
