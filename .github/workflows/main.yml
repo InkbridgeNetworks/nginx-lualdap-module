@@ -20,6 +20,10 @@ jobs:
       fail-fast: false
     env:
       apt-install: sudo apt-get install -y --no-install-recommends
+      # Lua version used for the test harness. Must be >= 5.2: Lua 5.1
+      # hits "attempt to yield across metamethod/C-call boundary" in
+      # cqueues/lua-http.
+      lua_version: "5.4"
       nginx_config_args: |
         --prefix=/usr/local/openresty \
         --conf-path=/etc/nginx/nginx.conf \
@@ -60,6 +64,9 @@ jobs:
           LDAP_PASSWORDS: testpass
           LDAP_ENABLE_SYNCPROV: true
     steps:
+      - name: Setup - Lua-version-derived env vars
+        run: echo "lua_bin=lua${{ env.lua_version }}" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -144,11 +151,11 @@ jobs:
 
       - name: Tests - Install Lua, test deps, and tooling
         run: |
-          ${{ env.apt-install }} lua5.4 liblua5.4-dev luarocks ldap-utils socat netcat-openbsd
-          sudo luarocks --lua-version 5.4 install --only-deps lualdap-nginx-tests-dev-1.rockspec
+          ${{ env.apt-install }} ${{ env.lua_bin }} liblua${{ env.lua_version }}-dev luarocks ldap-utils socat netcat-openbsd
+          sudo luarocks --lua-version ${{ env.lua_version }} install --only-deps lualdap-nginx-tests-dev-1.rockspec
           # dapman-http-unit lives in a private sibling repo. Install it from
           # the Inkbridge LuaRocks server.
-          sudo luarocks --lua-version 5.4 --server=https://luarocks.inkbridge.io/ install dapman-http-unit
+          sudo luarocks --lua-version ${{ env.lua_version }} --server=https://luarocks.inkbridge.io/ install dapman-http-unit
 
       - name: OpenLDAP - Wait for service
         run: |
@@ -205,10 +212,13 @@ jobs:
 
       - name: Tests - Run lualdap test suite
         env:
-          LUA54: /usr/bin/lua5.4
+          # run-tests.sh reads LUA54 (the env var historically named for
+          # the dev default Lua 5.4); set it from lua_bin so a future
+          # version bump touches only `lua_version` above.
+          LUA54: /usr/bin/${{ env.lua_bin }}
         run: |
-          eval "$(luarocks --lua-version 5.4 path)"
-          /usr/bin/lua5.4 bin/run_tests
+          eval "$(luarocks --lua-version ${{ env.lua_version }} path)"
+          /usr/bin/${{ env.lua_bin }} bin/run_tests
 
       - name: On Failure - Dump nginx debug log
         if: failure()
