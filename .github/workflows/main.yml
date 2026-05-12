@@ -201,19 +201,24 @@ jobs:
           exit 1
 
       #
-      #  Start nginx in background. nginx-service.sh handles the prefix
-      #  setup; we point NGINX_BIN at the system install (rather than the
-      #  script's default ./build/nginx/sbin/nginx, which doesn't exist in
-      #  CI since openresty was built into ./openresty-1.27.1.1/).
+      #  Start nginx directly (rather than via nginx-service.sh) so we can
+      #  inject `error_log <path> debug;` via -g — debug-level logs are
+      #  essential for diagnosing syncrepl/persistent-search test failures.
+      #  Uses the system openresty install rather than the script's
+      #  default ./build/nginx/sbin/nginx (which doesn't exist in CI).
       #
       - name: Tests - Start nginx
-        env:
-          NGINX_BIN: /usr/local/openresty/nginx/sbin/nginx
         run: |
-          ./nginx-service.sh start bg
+          mkdir -p build/test/log build/test/run
+          DEBUG_LOG="$PWD/build/test/log/debug.log"
+          PID_FILE="$PWD/build/test/run/nginx.pid"
+          /usr/local/openresty/nginx/sbin/nginx \
+            -c "$PWD/ci/nginx/nginx.conf" \
+            -e "$DEBUG_LOG" \
+            -g "daemon on; pid $PID_FILE; error_log $DEBUG_LOG debug;"
           for i in $(seq 1 40); do nc -z 127.0.0.1 8090 && exit 0; sleep 0.5; done
           echo "ERROR: nginx did not bind 8090 in time" >&2
-          tail -200 build/test/log/debug.log 2>/dev/null || true
+          tail -200 "$DEBUG_LOG" 2>/dev/null || true
           exit 1
 
       #
@@ -259,11 +264,20 @@ jobs:
       - name: Always - Dump nginx debug log + post-mortem
         if: always()
         run: |
+          DEBUG_LOG="$PWD/build/test/log/debug.log"
           echo "--- post-test nginx state ---"
           ss -ltnp 2>/dev/null | grep 8090 || echo "(nothing on 8090)"
           ps -ef | grep -E '[n]ginx' || echo "(no nginx process)"
-          echo "--- last 300 lines of nginx debug log ---"
-          tail -300 build/test/log/debug.log 2>/dev/null || true
+          echo "--- debug log size + tail ---"
+          ls -la "$DEBUG_LOG" 2>/dev/null || echo "(no debug log)"
+          # Slice around each failing test so the timeline is obvious;
+          # then dump the final 600 lines for the broader picture.
+          for test in TestMissingDn TestEntryUUIDOnDelete TestPersistentSearchResumesFromCookie TestRenameEventCount TestSse; do
+            echo "--- log entries mentioning $test ---"
+            grep -nE "$test|ldap-sse|search_persistent|sync" "$DEBUG_LOG" 2>/dev/null | head -30 || true
+          done
+          echo "--- final 600 lines ---"
+          tail -600 "$DEBUG_LOG" 2>/dev/null || true
 
       - name: "On Failure - Start tmate"
         uses: mxschmitt/action-tmate@v3
