@@ -283,6 +283,13 @@ jobs:
             grep -vE "worker cycle|epoll timer:|epoll: fd|timer delta:" "$DEBUG_LOG" > "$DEBUG_LOG.filtered" 2>/dev/null || true
             wc -l "$DEBUG_LOG" "$DEBUG_LOG.filtered" 2>/dev/null || true
           fi
+          echo "--- /var/log/nginx contents ---"
+          ls -la /var/log/nginx/ 2>/dev/null || echo "(no /var/log/nginx)"
+          echo "--- any other nginx log files on disk ---"
+          find / -name "*.log" -path "*nginx*" 2>/dev/null | head -20 || true
+          # Also copy the system error log to a known place so the artifact picks it up.
+          mkdir -p build/test/log
+          cp /var/log/nginx/error.log build/test/log/system-error.log 2>/dev/null || true
 
       - name: Always - Upload nginx debug log
         if: always()
@@ -292,6 +299,7 @@ jobs:
           path: |
             build/test/log/debug.log
             build/test/log/debug.log.filtered
+            build/test/log/system-error.log
           if-no-files-found: warn
           retention-days: 7
 
