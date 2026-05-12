@@ -68,6 +68,19 @@ start_container() {
     sleep 1
   done
   echo "LDAP is available"
+
+  # Grant cn=testuser write access to the test base. Required by the
+  # proxy_id tests, which bind as manager and use proxy authz to perform
+  # writes as testuser; the differential success/failure (and the recorded
+  # creatorsName/modifiersName) is the proof that proxy_id is being applied
+  # by the server. Without this ACL the bitnami default would refuse the
+  # writes and the tests couldn't tell a wired-up proxy from a broken one.
+  docker exec -i "$container_name" ldapmodify -Y EXTERNAL -H ldapi:/// >/dev/null <<EOF
+dn: olcDatabase={2}mdb,cn=config
+changetype: modify
+add: olcAccess
+olcAccess: {0}to dn.subtree="${base_dn}" by dn="cn=testuser,ou=users,${base_dn}" write by * read
+EOF
 }
 
 stop_container() {

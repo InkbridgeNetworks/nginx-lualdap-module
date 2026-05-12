@@ -81,6 +81,9 @@ typedef struct {
 	LDAP	  				*ld;	  	//!< LDAP handle.
 	ngx_peer_connection_t			conn;		//!< NGINX peer connection
 	ngx_http_lua_socket_tcp_upstream_t	*u;		//!< NGINX Socket object
+	char					*proxy_authz_id;     //!< Cached proxy authz identity bytes (heap-owned). May contain embedded NULs.
+	size_t					 proxy_authz_id_len; //!< Length of proxy_authz_id, for binary-safe comparison.
+	LDAPControl				*proxy_authz_ctrl;   //!< Prebuilt Proxy Authorisation Control; valid iff proxy_authz_id != NULL.
 } conn_data;
 
 typedef enum {
@@ -120,6 +123,93 @@ int luaopen_ngx_lualdap(lua_State *L);
 ngx_module_t  ngx_lualdap;
 
 #include "lualdap-ngx.c"
+
+/*
+ * RFC 4370 Proxy Authorisation Control OID.
+ * Value is a UTF-8 authzId: "dn:<dn>" or "u:<uid>".
+ */
+#define PROXY_AUTHZ_OID "2.16.840.1.113730.3.4.18"
+
+/*
+ * Build or reuse the Proxy Authorisation Control for conn.
+ *
+ * Returns NULL when authz_id is NULL so callers can pass NULL directly to
+ * ldap_*_ext as the server-controls array element.  When authz_id matches
+ * the cached id the existing control is returned immediately (zero work).
+ * Otherwise the old control is torn down and a new one is built; its memory
+ * is freed in ngx_http_auth_ldap_close_connection.
+ *
+ * authz_id is treated as binary (bv_val + bv_len); it is not assumed to be
+ * NUL-terminated.  ldap_control_create dups the value internally.
+ */
+static LDAPControl *
+proxy_control_add(conn_data *conn, const struct berval *authz_id)
+{
+	int rc;
+
+	if (!authz_id || !authz_id->bv_val)
+		return NULL;
+
+	/* Cache hit: same authz_id bytes as last call, reuse the prebuilt control. */
+	if (conn->proxy_authz_id
+	    && conn->proxy_authz_id_len == authz_id->bv_len
+	    && memcmp(conn->proxy_authz_id, authz_id->bv_val, authz_id->bv_len) == 0)
+		return conn->proxy_authz_ctrl;
+
+	/* Cache miss: tear down any stale control and rebuild. */
+	if (conn->proxy_authz_ctrl) {
+		ldap_control_free(conn->proxy_authz_ctrl);
+		conn->proxy_authz_ctrl = NULL;
+	}
+	free(conn->proxy_authz_id);
+	conn->proxy_authz_id = NULL;
+	conn->proxy_authz_id_len = 0;
+
+	rc = ldap_control_create((char *)PROXY_AUTHZ_OID, 1,
+				 (struct berval *)authz_id, 1,
+				 &conn->proxy_authz_ctrl);
+	if (rc != LDAP_SUCCESS)
+		return NULL;
+
+	conn->proxy_authz_id = malloc(authz_id->bv_len);
+	if (!conn->proxy_authz_id) {
+		ldap_control_free(conn->proxy_authz_ctrl);
+		conn->proxy_authz_ctrl = NULL;
+		return NULL;
+	}
+	memcpy(conn->proxy_authz_id, authz_id->bv_val, authz_id->bv_len);
+	conn->proxy_authz_id_len = authz_id->bv_len;
+
+	return conn->proxy_authz_ctrl;
+}
+
+/*
+ * Read table[field] as a berval into the caller-provided storage.
+ *
+ * Returns bv (filled) when the slot at table_pos is a table and table[field]
+ * is a string. Returns NULL when the slot is not a table, the field is
+ * absent, or the value is not a string. Length is taken via lua_tolstring,
+ * so embedded NULs are preserved.
+ *
+ * The returned bv_val points into the Lua string and is valid only until
+ * the caller next does anything that may release the value (Lua GC). In
+ * practice callers consume it immediately; if you need to retain the bytes,
+ * copy them out before any further Lua API call.
+ */
+static struct berval *
+table_field_to_berval(lua_State *L, int table_pos, const char *field, struct berval *bv)
+{
+	if (!lua_istable(L, table_pos))
+		return NULL;
+	lua_getfield(L, table_pos, field);
+	if (!lua_isstring(L, -1)) {
+		lua_pop(L, 1);
+		return NULL;
+	}
+	bv->bv_val = (char *)lua_tolstring(L, -1, &bv->bv_len);
+	lua_pop(L, 1);
+	return bv;
+}
 
 /*
 ** Typical error situation.
@@ -178,19 +268,19 @@ static int option_error (lua_State *L, const char *name, const char *type) {
 
 
 /*
-** Get the field called name of the table at position 2.
+** Push the value at table[name] onto the stack.
+** The table MUST be at the given absolute stack index.
 */
-static void strgettable (lua_State *L, const char *name) {
+static void strgettable (lua_State *L, int idx, const char *name) {
 	lua_pushstring (L, name);
-	lua_gettable (L, 3);
+	lua_gettable (L, idx);
 }
 
 /*
-** Get the field named name as a string.
-** The table MUST be at position 3.
+** Get the field named name as a string from the table at idx.
 */
-static const char *strtabparam (lua_State *L, const char *name, char *def) {
-	strgettable (L, name);
+static const char *strtabparam (lua_State *L, int idx, const char *name, char *def) {
+	strgettable (L, idx, name);
 	if (lua_isnil (L, -1))
 		return def;
 	else if (lua_isstring (L, -1))
@@ -202,11 +292,10 @@ static const char *strtabparam (lua_State *L, const char *name, char *def) {
 }
 
 /*
-** Get the field named name as an integer.
-** The table MUST be at position 3.
+** Get the field named name as an integer from the table at idx.
 */
-static long longtabparam (lua_State *L, const char *name, int def) {
-	strgettable (L, name);
+static long longtabparam (lua_State *L, int idx, const char *name, int def) {
+	strgettable (L, idx, name);
 	if (lua_isnil (L, -1))
 		return def;
 	else if (lua_isnumber (L, -1))
@@ -216,12 +305,11 @@ static long longtabparam (lua_State *L, const char *name, int def) {
 }
 
 /*
-** Get the field named name as a double.
-** The table MUST be at position 3.
+** Get the field named name as a double from the table at idx.
 */
-static double numbertabparam(lua_State *L, const char *name, double def)
+static double numbertabparam(lua_State *L, int idx, const char *name, double def)
 {
-	strgettable (L, name);
+	strgettable (L, idx, name);
 	if (lua_isnil(L, -1)) {
 		return def;
 	} else if (lua_isnumber(L, -1)) {
@@ -233,11 +321,10 @@ static double numbertabparam(lua_State *L, const char *name, double def)
 
 
 /*
-** Get the field named name as a boolean.
-** The table MUST be at position 3.
+** Get the field named name as a boolean from the table at idx.
 */
-static int booltabparam (lua_State *L, const char *name, int def) {
-	strgettable (L, name);
+static int booltabparam (lua_State *L, int idx, const char *name, int def) {
+	strgettable (L, idx, name);
 	if (lua_isnil (L, -1))
 		return def;
 	else if (lua_isboolean (L, -1))
@@ -247,11 +334,10 @@ static int booltabparam (lua_State *L, const char *name, int def) {
 }
 
 /*
-** Get the field named name as a boolean.
-** The table MUST be at position 3.
+** Get the field named name as light userdata from the table at idx.
 */
-static search_data_t *userdatatabparam (lua_State *L, const char *name) {
-	strgettable (L, name);
+static search_data_t *userdatatabparam (lua_State *L, int idx, const char *name) {
+	strgettable (L, idx, name);
 	if (lua_isnil (L, -1))
 		return NULL;
 	else
@@ -558,11 +644,19 @@ static void result_closure_push(lua_State *L, ldap_int_t msgid, int op)
 */
 static int lualdap_close(lua_State *L) {
 	conn_data *conn = (conn_data *)luaL_checkudata (L, 1, LUALDAP_CONNECTION_METATABLE);
+	int was_open;
+
 	luaL_argcheck(L, conn!=NULL, 1, LUALDAP_PREFIX"LDAP connection expected");
-	if (conn->ld == NULL) /* already closed */
-		return 0;
-	ldap_unbind_ext(conn->ld, NULL, NULL);
-	conn->ld = NULL;
+	was_open = conn->ld != NULL;
+
+	/*
+	 * Tears down ld plus the cached proxy authz control / id. Idempotent,
+	 * so safe whether we're called explicitly or via __gc after an
+	 * earlier close.
+	 */
+	conn_state_free(conn);
+
+	if (!was_open) return 0;	/* preserve old "already closed -> nothing" return */
 	lua_pushnumber (L, 1);
 	return 1;
 }
@@ -574,22 +668,31 @@ static int lualdap_close(lua_State *L) {
 ** @param #2 Socket object
 ** @param #3 String with new entry's DN.
 ** @param #4 Table with new entry's attributes and values.
+** @param #5 Optional table with extra options: { proxy_id = "dn:..." }
 ** @return Function to process the LDAP result.
 */
 static int lualdap_add(lua_State *L) {
 	conn_data *conn = getconnection(L);
-	update_socket(L, conn);
-
 	ldap_pchar_t dn = (ldap_pchar_t)luaL_checkstring (L, 3);
 	attrs_data attrs;
 	ldap_int_t rc;
 	int msgid;
+	struct berval proxy_id_bv;
+	LDAPControl *proxy_ctrl;
+	LDAPControl *ctrls[2];
+	LDAPControl **ctrls_p = ctrls;
+
+	update_socket(L, conn);
 
 	A_init(&attrs);
 	if (lua_istable (L, 4)) A_tab2mod(L, &attrs, 4, LUALDAP_MOD_ADD);
 	A_lastattr(L, &attrs);
 
-	rc = ldap_add_ext(conn->ld, dn, attrs.attrs, NULL, NULL, &msgid);
+	proxy_ctrl = proxy_control_add(conn, table_field_to_berval(L, 5, "proxy_id", &proxy_id_bv));
+	if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
+	*ctrls_p = NULL;
+
+	rc = ldap_add_ext(conn->ld, dn, attrs.attrs, ctrls, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
 
 	result_closure_push(L, msgid, LDAP_RES_ADD);
@@ -603,21 +706,31 @@ static int lualdap_add(lua_State *L) {
 ** @param #3 String with entry's DN.
 ** @param #4 String with attribute's name.
 ** @param #5 String with attribute's value.
+** @param #6 Optional table with extra options: { proxy_id = "dn:..." }
 ** @return Function to process the LDAP result.
 */
 static int lualdap_compare (lua_State *L) {
 	conn_data *conn = getconnection (L);
-	update_socket(L, conn);
-
 	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
 	ldap_pchar_t attr = (ldap_pchar_t) luaL_checkstring (L, 4);
 	BerValue bvalue;
 	ldap_int_t rc;
 	int msgid;
+	struct berval proxy_id_bv;
+	LDAPControl *proxy_ctrl;
+	LDAPControl *ctrls[2];
+	LDAPControl **ctrls_p = ctrls;
+
+	update_socket(L, conn);
+
 	bvalue.bv_val = (char *)luaL_checkstring (L, 5);
 	bvalue.bv_len = lua_strlen (L, 5);
 
-	rc = ldap_compare_ext (conn->ld, dn, attr, &bvalue, NULL, NULL, &msgid);
+	proxy_ctrl = proxy_control_add(conn, table_field_to_berval(L, 6, "proxy_id", &proxy_id_bv));
+	if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
+	*ctrls_p = NULL;
+
+	rc = ldap_compare_ext (conn->ld, dn, attr, &bvalue, ctrls, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
 
 	result_closure_push(L, msgid, LDAP_RES_COMPARE);
@@ -629,19 +742,27 @@ static int lualdap_compare (lua_State *L) {
 ** @param #1 LDAP connection.
 ** @param #2 Socket object
 ** @param #3 String with entry's DN.
+** @param #4 Optional table with extra options: { proxy_id = "dn:..." }
 ** @return Boolean.
 */
 static int lualdap_delete (lua_State *L)
 {
 	conn_data	*conn = getconnection (L);
+	ldap_pchar_t	dn = (ldap_pchar_t) luaL_checkstring (L, 3);
 	ldap_int_t	rc;
 	int		msgid;
+	struct berval	proxy_id_bv;
+	LDAPControl	*proxy_ctrl;
+	LDAPControl	*ctrls[2];
+	LDAPControl	**ctrls_p = ctrls;
 
 	update_socket(L, conn);
 
-	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
+	proxy_ctrl = proxy_control_add(conn, table_field_to_berval(L, 4, "proxy_id", &proxy_id_bv));
+	if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
+	*ctrls_p = NULL;
 
-	rc = ldap_delete_ext (conn->ld, dn, NULL, NULL, &msgid);
+	rc = ldap_delete_ext (conn->ld, dn, ctrls, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
 
 	result_closure_push(L, msgid, LDAP_RES_DELETE);
@@ -673,32 +794,51 @@ static int op2code (const char *s) {
 ** @param #2 Socket object
 ** @param #3 String with entry's DN.
 ** @param #4, #5... Tables with modifications to apply.
+**   Each modification table must have [1] set to '+', '-', or '='.
+**   A trailing table without a valid operation code is treated as an options
+**   table and may contain: { proxy_id = "dn:..." }
 ** @return True on success or nil, error message otherwise.
 */
 static int lualdap_modify (lua_State *L) {
 	conn_data *conn = getconnection (L);
-	update_socket(L, conn);
-
 	ldap_pchar_t dn = (ldap_pchar_t) luaL_checkstring (L, 3);
 	attrs_data attrs;
 	ldap_int_t rc;
 	int msgid;
 	int param = 4;
+	struct berval proxy_id_bv;
+	struct berval *proxy_id = NULL;
+	LDAPControl *proxy_ctrl;
+	LDAPControl *ctrls[2];
+	LDAPControl **ctrls_p = ctrls;
+
+	update_socket(L, conn);
+
 	A_init (&attrs);
 	while (lua_istable (L, param)) {
+		const char *op_str;
 		int op;
-		/* get operation ('+','-','=' operations allowed) */
-		lua_rawgeti (L, param, 1);
-		op = op2code (lua_tostring (L, -1));
-		if (op == LUALDAP_NO_OP)
-			return luaL_error (L, LUALDAP_PREFIX"forgotten operation on argument #%d", param);
-		/* get array of attributes and values */
+
+		/* Check operation code at [1]; a missing/invalid code marks an opts table. */
+		lua_rawgeti(L, param, 1);
+		op_str = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
+		op = op2code(op_str);
+		lua_pop(L, 1);
+
+		if (op == LUALDAP_NO_OP) {
+			proxy_id = table_field_to_berval(L, param, "proxy_id", &proxy_id_bv);
+			break;
+		}
 		A_tab2mod (L, &attrs, param, op);
 		param++;
 	}
 	A_lastattr(L, &attrs);
 
-	rc = ldap_modify_ext (conn->ld, dn, attrs.attrs, NULL, NULL, &msgid);
+	proxy_ctrl = proxy_control_add(conn, proxy_id);
+	if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
+	*ctrls_p = NULL;
+
+	rc = ldap_modify_ext (conn->ld, dn, attrs.attrs, ctrls, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
 
 	result_closure_push(L, msgid, LDAP_RES_MODIFY);
@@ -708,6 +848,13 @@ static int lualdap_modify (lua_State *L) {
 
 /*
 ** Change the distinguished name of an entry.
+** @param #1 LDAP connection.
+** @param #2 Socket object
+** @param #3 String with entry's current DN.
+** @param #4 String with new RDN.
+** @param #5 Optional new parent DN (nil to keep in place).
+** @param #6 Boolean: delete old RDN values (default 0).
+** @param #7 Optional table with extra options: { proxy_id = "dn:..." }
 */
 static int lualdap_rename (lua_State *L) {
 	conn_data	*conn = getconnection (L);
@@ -717,6 +864,10 @@ static int lualdap_rename (lua_State *L) {
 	int		del;
 	int		msgid;
 	ldap_int_t	rc;
+	struct berval	proxy_id_bv;
+	LDAPControl	*proxy_ctrl;
+	LDAPControl	*ctrls[2];
+	LDAPControl	**ctrls_p = ctrls;
 
 	update_socket(L, conn);
 
@@ -725,7 +876,11 @@ static int lualdap_rename (lua_State *L) {
 	par = (ldap_pchar_t) luaL_optlstring(L, 5, NULL, NULL);
 	del = luaL_optnumber(L, 6, 0);
 
-	rc = ldap_rename (conn->ld, dn, rdn, par, del, NULL, NULL, &msgid);
+	proxy_ctrl = proxy_control_add(conn, table_field_to_berval(L, 7, "proxy_id", &proxy_id_bv));
+	if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
+	*ctrls_p = NULL;
+
+	rc = ldap_rename(conn->ld, dn, rdn, par, del, ctrls, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
 
 	result_closure_push(L, msgid, LDAP_RES_MODDN);
@@ -1047,30 +1202,44 @@ static void ensure_attr_in_list(char *attrs[], const char *name, int max)
 }
 
 /*
-** Fill in the attrs array, according to the attrs parameter.
+** Fill in the attrs array from the value at the given stack index.
+**
+** The slot may be:
+**   - nil (or absent)  -> no explicit attrs requested (request all)
+**   - a string         -> single-attribute list
+**   - a table          -> array of attribute names
 */
-static int get_attrs_param (lua_State *L, char *attrs[]) {
-	lua_pushstring (L, "attrs");
-	lua_gettable (L, 3);
-	if (lua_isstring (L, -1)) {
-		attrs[0] = (char *)lua_tostring (L, -1);
+static int get_attrs_param (lua_State *L, int idx, char *attrs[]) {
+	if (lua_isnoneornil (L, idx)) {
+		attrs[0] = NULL;
+	} else if (lua_isstring (L, idx)) {
+		attrs[0] = (char *)lua_tostring (L, idx);
 		attrs[1] = NULL;
-	} else if (!lua_istable (L, -1))
+	} else if (lua_istable (L, idx)) {
 		attrs[0] = NULL;
-	else {
-		attrs[0] = NULL;
-		if (table2strarray (L, lua_gettop (L), attrs, LUALDAP_MAX_ATTRS))
+		if (table2strarray (L, idx, attrs, LUALDAP_MAX_ATTRS))
 			return 0;
+	} else {
+		luaL_error (L, LUALDAP_PREFIX "invalid value for `attrs' (%s)",
+			    lua_typename (L, lua_type (L, idx)));
+		return 0;
 	}
 	return 1;
 }
 
 
 /*
-** Fill in the struct timeval, according to the timeout parameter.
+** Fill in the struct timeval, according to the "timeout" field of the
+** options table at the given stack index. Returns NULL when the slot is
+** absent or the field is missing/zero.
 */
-static struct timeval *get_timeout_param (lua_State *L, struct timeval *st) {
-	double t = numbertabparam (L, "timeout", 0);
+static struct timeval *get_timeout_param (lua_State *L, int idx, struct timeval *st) {
+	double t;
+
+	if (!lua_istable (L, idx))
+		return NULL;
+
+	t = numbertabparam (L, idx, "timeout", 0);
 	st->tv_sec = (long)t;
 	st->tv_usec = (long)(1000000 * (t - st->tv_sec));
 	if (st->tv_sec == 0 && st->tv_usec == 0)
@@ -1082,20 +1251,21 @@ static struct timeval *get_timeout_param (lua_State *L, struct timeval *st) {
 /** Perform a persistent search operation.
  *
  * Initialises a persistent search operation on the given connection.
- * Thie connection is not returned to the pool until the search is closed.
+ * The connection is not returned to the pool until the search is closed.
  *
- * @param #1 table containing search parameters:
- *			- base: Base DN to search from.
- *			- filter: Filter to apply to the search.
- *			- scope: Scope of the search, one of:
- *				- "base" for LDAP_SCOPE_BASE
- *				- "one" for LDAP_SCOPE_ONELEVEL
- *				- "sub" for LDAP_SCOPE_SUBTREE
- *			- attrs: Table with attributes to retrieve.
+ * @param #1 LDAP connection.
+ * @param #2 Socket object.
+ * @param #3 String, base DN.
+ * @param #4 String or nil, LDAP search filter.
+ * @param #5 String, scope: "base" / "one" / "sub".
+ * @param #6 String, table of strings, or nil, attributes to retrieve.
+ *           entryUUID is always added if not already present.
+ * @param #7 Optional table of options, may contain:
+ *            - cookie    (string)  resume cookie from a prior sync
+ *            - proxy_id  (string)  authzId for proxied authorization
  *
  * @return #1 Function to iterate over the result entries.
- * @return #2 nil.
- * @return #3 nil as first entry.
+ * @return #2 Search handle.
  * The search result is defined as an upvalue of the iterator.
  */
 static int lualdap_search_persistent(lua_State *L)
@@ -1107,7 +1277,9 @@ static int lualdap_search_persistent(lua_State *L)
 	char				*attrs[LUALDAP_MAX_ATTRS];
 	int					scope, rc;
 
-	LDAPControl			ctrl = {0}, *ctrls[2] = { &ctrl, NULL };
+	LDAPControl			ctrl = {0};
+	LDAPControl			*ctrls[3];
+	LDAPControl			**ctrls_p = ctrls;
 	BerElement			*ber = NULL;
 	static char const	*sync_ctl_oid = LDAP_CONTROL_SYNC;
 
@@ -1115,13 +1287,20 @@ static int lualdap_search_persistent(lua_State *L)
 	struct berval		*cookie = NULL;   /* Resume cookie from a prior sync, if any */
 	ngx_http_request_t	*r;
 	int					msgid;
+	int opts_idx = 7;
+	int has_opts;
 
 	if (!lua_istable(L, 2))
 		return luaL_error (L, LUALDAP_PREFIX "no connection socket");
-	if (!lua_istable(L, 3))
-		return luaL_error(L, LUALDAP_PREFIX "no search specification");
-	if (!get_attrs_param(L, attrs))
+
+	base = (ldap_pchar_t) luaL_checkstring (L, 3);
+	filter = lua_isnoneornil (L, 4) ? NULL : (ldap_pchar_t) luaL_checkstring (L, 4);
+	scope = string2scope (L, luaL_checkstring (L, 5));
+
+	if (!get_attrs_param(L, 6, attrs))
 		return 2;
+
+	has_opts = lua_istable (L, opts_idx);
 
 	/* Persistent searches always need entryUUID as a regular attribute.
 	 * It is operational and so omitted unless explicitly requested; we want
@@ -1137,16 +1316,11 @@ static int lualdap_search_persistent(lua_State *L)
 	r = ngx_http_lua_get_req(L);
 	if (r == NULL) return luaL_error(L, "no request found");
 
-	/* get other parameters */
-	base = (ldap_pchar_t)strtabparam(L, "base", NULL);
-	filter = (ldap_pchar_t)strtabparam(L, "filter", NULL);
-	scope = string2scope(L, strtabparam(L, "scope", NULL));
-
 	/* Optional resume cookie. When provided, the server skips the refresh
 	 * phase (or sends "present" markers for unchanged entries) and only
 	 * ships changes since the cookie's CSN. */
-	{
-		const char *c = strtabparam(L, "cookie", NULL);
+	if (has_opts) {
+		const char *c = strtabparam(L, opts_idx, "cookie", NULL);
 		if (c) {
 			cookie_storage.bv_val = (char *)c;
 			cookie_storage.bv_len = strlen(c);
@@ -1169,14 +1343,24 @@ static int lualdap_search_persistent(lua_State *L)
 		ber_printf(ber, "{eb}", LDAP_SYNC_REFRESH_AND_PERSIST, false);
 	}
 
-	rc = ber_flatten2(ber, &ctrls[0]->ldctl_value, 0);
+	rc = ber_flatten2(ber, &ctrl.ldctl_value, 0);
 	if (rc < 0) {
 		ber_free(ber, 1);
 		return luaL_error(L, LUALDAP_PREFIX "Failed creating sync control");
 	}
 
-	memcpy(&ctrls[0]->ldctl_oid, &sync_ctl_oid, sizeof(ctrls[0]->ldctl_oid));
+	memcpy(&ctrl.ldctl_oid, &sync_ctl_oid, sizeof(ctrl.ldctl_oid));
 	ctrl.ldctl_iscritical = 1;
+
+	*ctrls_p++ = &ctrl;	/* sync control is mandatory for persistent search */
+
+	{
+		struct berval proxy_id_bv;
+		struct berval *proxy_id = has_opts ? table_field_to_berval(L, opts_idx, "proxy_id", &proxy_id_bv) : NULL;
+		LDAPControl *proxy_ctrl = proxy_control_add(conn, proxy_id);
+		if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
+	}
+	*ctrls_p = NULL;
 
 	rc = ldap_search_ext(conn->ld, base, scope, filter, attrs, 0,
 						 ctrls, NULL, NULL, 0, &msgid);
@@ -1202,9 +1386,23 @@ static int lualdap_search_persistent(lua_State *L)
 
 /*
 ** Perform a search operation.
+**
+** @param #1 LDAP connection.
+** @param #2 Socket object.
+** @param #3 String, base DN.
+** @param #4 String or nil, LDAP search filter.
+** @param #5 String, scope: "base" / "one" / "sub".
+** @param #6 String, table of strings, or nil, attributes to retrieve.
+** @param #7 Optional table of options, may contain:
+**            - attrsonly  (bool)         default false
+**            - sizelimit  (int)          default LDAP_NO_LIMIT
+**            - pagesize   (int)          default 0 (no paging)
+**            - search     (light userdata) prior search handle for paging
+**            - timeout    (number)       seconds, default 0 (no timeout)
+**            - proxy_id   (string)       authzId for proxied authorization
+**
 ** @return #1 Function to iterate over the result entries.
-** @return #2 nil.
-** @return #3 nil as first entry.
+** @return #2 Search handle (for more_pages / continued paging).
 ** The search result is defined as an upvalue of the iterator.
 */
 static int lualdap_search(lua_State *L)
@@ -1215,18 +1413,27 @@ static int lualdap_search(lua_State *L)
 	char *attrs[LUALDAP_MAX_ATTRS];
 	int scope, attrsonly, rc, sizelimit, pagesize;
 	struct timeval st, *timeout;
-	LDAPControl *pageControl = NULL, *ctrls[2] = { NULL, NULL };
+	LDAPControl *pageControl = NULL;
+	LDAPControl *ctrls[3];
+	LDAPControl **ctrls_p = ctrls;
 	struct berval *cookie = NULL;   /* Cookie for paging */
 	search_data_t * current_search;
 	ngx_http_request_t	  *r;
 	int msgid;
+	int opts_idx = 7;
+	int has_opts;
 
 	if (!lua_istable (L, 2))
 		return luaL_error(L, LUALDAP_PREFIX "no connection socket");
-	if (!lua_istable (L, 3))
-		return luaL_error(L, LUALDAP_PREFIX "no search specification");
-	if (!get_attrs_param (L, attrs))
+
+	base = (ldap_pchar_t) luaL_checkstring (L, 3);
+	filter = lua_isnoneornil (L, 4) ? NULL : (ldap_pchar_t) luaL_checkstring (L, 4);
+	scope = string2scope (L, luaL_checkstring (L, 5));
+
+	if (!get_attrs_param (L, 6, attrs))
 		return 2;
+
+	has_opts = lua_istable (L, opts_idx);
 
 	/* Update internal connection to use new connection from pool */
 	update_socket(L, conn);
@@ -1236,15 +1443,20 @@ static int lualdap_search(lua_State *L)
 		return luaL_error(L, "no request found");
 	}
 
-	/* get other parameters */
-	attrsonly = booltabparam(L, "attrsonly", 0);
-	base = (ldap_pchar_t) strtabparam(L, "base", NULL);
-	filter = (ldap_pchar_t) strtabparam(L, "filter", NULL);
-	scope = string2scope(L, strtabparam(L, "scope", NULL));
-	sizelimit = longtabparam(L, "sizelimit", LDAP_NO_LIMIT);
-	pagesize = longtabparam(L, "pagesize", 0);
-	current_search = userdatatabparam(L, "search");
-	timeout = get_timeout_param(L, &st);
+	/* get optional parameters */
+	if (has_opts) {
+		attrsonly = booltabparam(L, opts_idx, "attrsonly", 0);
+		sizelimit = longtabparam(L, opts_idx, "sizelimit", LDAP_NO_LIMIT);
+		pagesize = longtabparam(L, opts_idx, "pagesize", 0);
+		current_search = userdatatabparam(L, opts_idx, "search");
+		timeout = get_timeout_param(L, opts_idx, &st);
+	} else {
+		attrsonly = 0;
+		sizelimit = LDAP_NO_LIMIT;
+		pagesize = 0;
+		current_search = NULL;
+		timeout = NULL;
+	}
 
 	if (pagesize) {
 		if (current_search) {
@@ -1254,10 +1466,16 @@ static int lualdap_search(lua_State *L)
 		if (rc != LDAP_SUCCESS) {
 			return luaL_error (L, LUALDAP_PREFIX"%s", ldap_err2string (rc));
 		}
-
-		/* Insert the control into a list to be passed to the search. */
-		ctrls[0] = pageControl;
+		*ctrls_p++ = pageControl;
 	}
+
+	{
+		struct berval proxy_id_bv;
+		struct berval *proxy_id = has_opts ? table_field_to_berval(L, opts_idx, "proxy_id", &proxy_id_bv) : NULL;
+		LDAPControl *proxy_ctrl = proxy_control_add(conn, proxy_id);
+		if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
+	}
+	*ctrls_p = NULL;
 
 	rc = ldap_search_ext(conn->ld, base, scope, filter, attrs, attrsonly,
 						 ctrls, NULL, timeout, sizelimit, &msgid);

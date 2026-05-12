@@ -843,9 +843,17 @@ static int lualdap_init(lua_State *L)
 	 *  Allocate new connection data in the Lua envirionment
 	 *  this holds the LDAP * and the file descriptor.
 	 *
+	 *  Zero the storage: lua_newuserdata returns uninitialised memory,
+	 *  and we rely on conn->proxy_authz_id / conn->proxy_authz_ctrl etc.
+	 *  starting NULL for the cache logic in proxy_control_add and the
+	 *  cleanup in lualdap_close.
+	 *
 	 *  This is pushed onto the Lua stack.
 	 */
-	(void)lua_newuserdata(L, sizeof(conn_data)); /* New data pushed onto Lua stack */
+	{
+		conn_data *conn = (conn_data *)lua_newuserdata(L, sizeof(conn_data));
+		memset(conn, 0, sizeof(*conn));
+	}
 
 	/*
 	 *  Associate methods with the connection object.
@@ -1417,17 +1425,39 @@ ldap_bind_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tcp_
 	return 1;
 }
 
+/*
+ * Tear down all heap-owned state on a conn_data.
+ *
+ * Idempotent: every field is gated on non-NULL and reset after free, so
+ * calling more than once (e.g. explicit lualdap.close followed by __gc)
+ * is safe.
+ */
+static void
+conn_state_free(conn_data *c)
+{
+	if (c->ld) {
+		ldap_unbind_ext(c->ld, NULL, NULL);
+		/* Unbind is always synchronous, even though the function name does not end with an '_s'. */
+		c->ld = NULL;
+	}
+
+	if (c->proxy_authz_ctrl) {
+		ldap_control_free(c->proxy_authz_ctrl);
+		c->proxy_authz_ctrl = NULL;
+	}
+	free(c->proxy_authz_id);
+	c->proxy_authz_id = NULL;
+	c->proxy_authz_id_len = 0;
+}
+
 static void
 ngx_http_auth_ldap_close_connection(conn_data *c, ngx_log_t *log)
 {
 	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, log, 0, "entered %s", __FUNCTION__);
+	if (c->ld)
+		ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0, "http_auth_ldap: Unbinding from the server");
 
-	if (c->ld) {
-	ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0, "http_auth_ldap: Unbinding from the server");
-	ldap_unbind_ext(c->ld, NULL, NULL);
-	/* Unbind is always synchronous, even though the function name does not end with an '_s'. */
-	c->ld = NULL;
-	}
+	conn_state_free(c);
 }
 
 static void
