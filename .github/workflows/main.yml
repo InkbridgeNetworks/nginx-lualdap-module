@@ -260,10 +260,9 @@ jobs:
       #
       #  always() so we get the dump even when the test step is cancelled
       #  by the workflow timeout (failure() doesn't fire on cancellation).
-      #  We stop nginx FIRST so the debug log isn't drowned in
-      #  post-test "worker cycle" spam by the time we tail it.
+      #  Stop nginx FIRST so the debug log stops growing.
       #
-      - name: Always - Dump nginx debug log + post-mortem
+      - name: Always - Stop nginx + capture debug log
         if: always()
         run: |
           DEBUG_LOG="$PWD/build/test/log/debug.log"
@@ -272,18 +271,29 @@ jobs:
           ss -ltnp 2>/dev/null | grep 8090 || echo "(nothing on 8090)"
           ps -ef | grep -E '[n]ginx' || echo "(no nginx process)"
           if [ -f "$PID_FILE" ]; then
-            echo "--- stopping nginx so log stops growing ---"
             kill "$(cat "$PID_FILE")" 2>/dev/null || true
             sleep 1
           fi
           echo "--- debug log size ---"
           ls -la "$DEBUG_LOG" 2>/dev/null || echo "(no debug log)"
-          # Slice for the SSE / persistent-search activity that matters.
-          echo "--- entries mentioning persistent-search / SSE / sync ---"
-          grep -nE "ldap-sse|search_persistent|persistent|sync|abandon|cookie|cn=ci_resume|lua entry thread aborted" \
-            "$DEBUG_LOG" 2>/dev/null | head -200 || true
-          echo "--- last 400 non-spammy lines (excluding idle worker cycle) ---"
-          grep -vE "worker cycle|epoll timer:|epoll: fd|timer delta:" "$DEBUG_LOG" 2>/dev/null | tail -400 || true
+          # Pre-filter the noisiest spam so the uploaded artifact is
+          # something a human can scan in vim. Worker cycle / epoll timer
+          # lines are 99% of the volume and contain no test signal.
+          if [ -f "$DEBUG_LOG" ]; then
+            grep -vE "worker cycle|epoll timer:|epoll: fd|timer delta:" "$DEBUG_LOG" > "$DEBUG_LOG.filtered" 2>/dev/null || true
+            wc -l "$DEBUG_LOG" "$DEBUG_LOG.filtered" 2>/dev/null || true
+          fi
+
+      - name: Always - Upload nginx debug log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nginx-debug-log
+          path: |
+            build/test/log/debug.log
+            build/test/log/debug.log.filtered
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: "On Failure - Start tmate"
         uses: mxschmitt/action-tmate@v3
