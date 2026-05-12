@@ -124,22 +124,9 @@ jobs:
         run: |
           ${{ env.apt-install }} lua5.4 liblua5.4-dev luarocks ldap-utils
           sudo luarocks --lua-version 5.4 install --only-deps lualdap-nginx-tests-dev-1.rockspec
-
-      #
-      #  bin/run_tests requires `dapman-http-unit` from the parent SubMan
-      #  project (it lives outside this submodule). Pull it in via a sparse
-      #  checkout and place it on the test runner's package path.
-      #
-      - name: Tests - Checkout dapman-http-unit from parent SubMan
-        uses: actions/checkout@v4
-        with:
-          repository: InkbridgeNetworks/SubMan
-          path: subman-checkout
-          sparse-checkout: src/http-unit
-          sparse-checkout-cone-mode: false
-
-      - name: Tests - Stage dapman-http-unit
-        run: ln -sf "${{ github.workspace }}/subman-checkout/src/http-unit/init.lua" tests/dapman-http-unit.lua
+          # dapman-http-unit lives in a private sibling repo. Install it from
+          # the Inkbridge LuaRocks server.
+          sudo luarocks --lua-version 5.4 --server=https://luarocks.inkbridge.io/ install dapman-http-unit
 
       #
       #  ./run-tests.sh starts the LDAP container itself (via
