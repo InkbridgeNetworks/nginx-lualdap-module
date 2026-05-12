@@ -68,7 +68,7 @@ jobs:
         run: echo "lua_bin=lua${{ env.lua_version }}" >> "$GITHUB_ENV"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           lfs: true
           submodules: recursive
@@ -102,7 +102,7 @@ jobs:
             zlib1g-dev
 
       - name: Get number of CPU cores
-        uses: SimenB/github-actions-cpu-cores@v2
+        uses: SimenB/github-actions-cpu-cores@v3
         id: cpu-cores
         
       #
@@ -111,7 +111,7 @@ jobs:
       #
       - name: NGINX - Restore build directory
         id: nginx-build-restore
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ${{ github.workspace }}/openresty-${{ env.openresty_version }}
@@ -135,7 +135,7 @@ jobs:
       - name: NGINX - Cache build state
         if: steps.nginx-build-restore.outputs.cache-hit != 'true'
         id: nginx-build-store
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             ${{ github.workspace }}/openresty-${{ env.openresty_version  }}
@@ -300,7 +300,7 @@ jobs:
 
       - name: Always - Upload nginx debug log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: nginx-debug-log
           path: |
