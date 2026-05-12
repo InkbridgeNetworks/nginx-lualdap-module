@@ -253,33 +253,48 @@ push_sync_meta(lua_State *L, LDAP *ld, LDAPMessage *entry, search_data_t *search
 
 /*
  * Parse an RFC 4533 syncInfoValue (the value of an LDAP_RES_INTERMEDIATE
- * with OID LDAP_SYNC_INFO) and update search->latest_cookie if a cookie is
- * present in any of the four CHOICE variants (newcookie, refreshDelete,
- * refreshPresent, syncIdSet). Silently no-ops on malformed input.
+ * with OID LDAP_SYNC_INFO).
+ *
+ * Side effects:
+ *   - Updates search->latest_cookie if a cookie is present in the
+ *     newcookie / refreshDelete / refreshPresent / syncIdSet CHOICE.
+ *
+ * Returns 1 if the message signalled refresh-done (refreshDelete or
+ * refreshPresent with refreshDone=TRUE), 0 otherwise. refreshDone is
+ * the syncrepl transition from refresh phase to persist phase: after
+ * this point, every change to a matching entry produces a per-entry
+ * notification. Callers use this to emit a "streamBegins" marker up to
+ * Lua so application code (e.g. SSE endpoints) can fire a "ready"
+ * signal to clients without racing against the refresh phase.
+ *
+ * Silently no-ops on malformed input.
  */
-static void
+static int
 update_cookie_from_sync_info(search_data_t *search, struct berval *infoval)
 {
 	BerElement    *ber;
 	ber_tag_t      top_tag, peek_tag;
 	ber_len_t      len;
 	struct berval  cookie_bv = {0, NULL};
+	ber_int_t      refresh_done = 0;
+	int            top_choice;
 
-	if (!infoval || !infoval->bv_val) return;
+	if (!infoval || !infoval->bv_val) return 0;
 
 	ber = ber_init(infoval);
-	if (!ber) return;
+	if (!ber) return 0;
 
 	top_tag = ber_peek_tag(ber, &len);
-	switch (top_tag & 0x1f) {  /* tag number, ignoring class+constructed bits */
+	top_choice = top_tag & 0x1f;  /* tag number, ignoring class+constructed bits */
+	switch (top_choice) {
 	case 0:  /* newcookie [0]: the value IS the cookie OCTET STRING */
 		if (ber_scanf(ber, "o", &cookie_bv) != LBER_ERROR) {
 			store_latest_cookie(search, &cookie_bv);
 			if (cookie_bv.bv_val) ber_memfree(cookie_bv.bv_val);
 		}
 		break;
-	case 1:  /* refreshDelete  [1] SEQUENCE { cookie? syncCookie, refreshDone? BOOL } */
-	case 2:  /* refreshPresent [2] SEQUENCE { cookie? syncCookie, refreshDone? BOOL } */
+	case 1:  /* refreshDelete  [1] SEQUENCE { cookie? syncCookie, refreshDone? BOOL DEFAULT TRUE } */
+	case 2:  /* refreshPresent [2] SEQUENCE { cookie? syncCookie, refreshDone? BOOL DEFAULT TRUE } */
 	case 3:  /* syncIdSet      [3] SEQUENCE { cookie? syncCookie, refreshDeletes? BOOL, syncUUIDs SET } */
 		if (ber_scanf(ber, "{" /*}*/) == LBER_ERROR) break;
 		peek_tag = ber_peek_tag(ber, &len);
@@ -288,10 +303,26 @@ update_cookie_from_sync_info(search_data_t *search, struct berval *infoval)
 				store_latest_cookie(search, &cookie_bv);
 				if (cookie_bv.bv_val) ber_memfree(cookie_bv.bv_val);
 			}
+			peek_tag = ber_peek_tag(ber, &len);
+		}
+		/*
+		 * refreshDelete/Present carry an optional refreshDone BOOL with
+		 * a DEFAULT of TRUE per RFC 4533 §2.5. The default applies if
+		 * the BOOL is absent from the wire. syncIdSet doesn't have this
+		 * field, so we don't read it there.
+		 */
+		if (top_choice == 1 || top_choice == 2) {
+			if (peek_tag == LBER_BOOLEAN) {
+				if (ber_scanf(ber, "b", &refresh_done) == LBER_ERROR)
+					refresh_done = 1;
+			} else {
+				refresh_done = 1;  /* DEFAULT TRUE */
+			}
 		}
 		break;
 	}
 	ber_free(ber, 1);
+	return refresh_done ? 1 : 0;
 }
 
 static int
@@ -576,20 +607,50 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			ret = 0;
 			break;
 		case LDAP_RES_INTERMEDIATE: {
-			/* RFC 4533 syncInfoMessage carries cookie checkpoints (newcookie /
+			/*
+			 * RFC 4533 syncInfoMessage carries cookie checkpoints (newcookie /
 			 * refreshDelete / refreshPresent / syncIdSet). Extract the cookie
 			 * if any and stash it on the search state so the next entry event
-			 * carries it. The message itself is then discarded and we re-arm. */
+			 * carries it.
+			 *
+			 * refreshDelete/refreshPresent with refreshDone=TRUE signals the
+			 * end of the syncrepl refresh phase and entry into persist mode.
+			 * We surface this to Lua as a synthetic marker — (nil, nil,
+			 * {syncOp="streamBegins"}) — so callers (e.g. the SSE endpoint)
+			 * can defer client-visible "ready" signalling until after the
+			 * server is in persist mode. Without this, a client that issues
+			 * a change immediately after the search opens races against the
+			 * still-in-progress refresh phase and the change may be folded
+			 * into refreshDone's queue-drain instead of producing a
+			 * per-entry notification.
+			 */
 			char          *oid = NULL;
 			struct berval *value = NULL;
+			int            refresh_done = 0;
 			if (ldap_parse_intermediate(conn->ld, op_ctx->res, &oid, &value, NULL, 0) == LDAP_SUCCESS
 			    && oid && strcmp(oid, LDAP_SYNC_INFO) == 0) {
-				update_cookie_from_sync_info(search, value);
+				refresh_done = update_cookie_from_sync_info(search, value);
 			}
 			if (oid) ldap_memfree(oid);
 			if (value) ber_bvfree(value);
 			ldap_msgfree(op_ctx->res);
 			op_ctx->res = NULL;
+
+			if (refresh_done && search->type == SEARCH_TYPE_PERSISTENT) {
+				ngx_free(op_ctx);
+				lua_pushnil(L);		/* dn = nil */
+				lua_pushnil(L);		/* attribs = nil */
+				lua_newtable(L);	/* meta = {} */
+				lua_pushliteral(L, "streamBegins");
+				lua_setfield(L, -2, "syncOp");
+				if (search->latest_cookie && search->latest_cookie->bv_val) {
+					lua_pushlstring(L, search->latest_cookie->bv_val,
+							 search->latest_cookie->bv_len);
+					lua_setfield(L, -2, "syncCookie");
+				}
+				return 3;
+			}
+
 			conn->conn.connection->read->handler = ldap_socket_handler;
 			if (op_ctx->timeout > 0) ngx_add_timer(conn->conn.connection->read, op_ctx->timeout);
 			u->read_event_handler = ldap_search_handler;
