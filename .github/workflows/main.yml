@@ -211,11 +211,13 @@ jobs:
           mkdir -p build/test/log build/test/run
           DEBUG_LOG="$PWD/build/test/log/debug.log"
           PID_FILE="$PWD/build/test/run/nginx.pid"
-          # Inject error_log into the shared conf in-place — temporary
-          # mutation, only used for this CI step. -p sets the prefix so
-          # `include mime.types` resolves to /usr/local/openresty/...
-          sed -i "1i error_log $DEBUG_LOG debug;" ci/nginx/nginx.conf
-          head -5 ci/nginx/nginx.conf
+          # ci/nginx/conf.d/log.conf has `error_log stderr debug;` which
+          # is fine for foreground dev runs but in CI we daemonize, so
+          # stderr becomes /dev/null and every lualdap [info] log
+          # vanishes. Rewrite it to point at our actual debug log file
+          # so we can see syncrepl/persistent-search activity.
+          sed -i "s|error_log .*|error_log $DEBUG_LOG debug;|" ci/nginx/conf.d/log.conf
+          cat ci/nginx/conf.d/log.conf
           /usr/local/openresty/nginx/sbin/nginx \
             -p /usr/local/openresty/nginx \
             -c "$PWD/ci/nginx/nginx.conf" \
