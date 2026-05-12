@@ -211,14 +211,14 @@ jobs:
           mkdir -p build/test/log build/test/run
           DEBUG_LOG="$PWD/build/test/log/debug.log"
           PID_FILE="$PWD/build/test/run/nginx.pid"
-          CI_CONF="$PWD/build/test/nginx.ci.conf"
-          # Copy the shared conf and inject error_log at the top so debug
-          # logs from every subsystem land in $DEBUG_LOG.
-          cp ci/nginx/nginx.conf "$CI_CONF"
-          sed -i "1i error_log $DEBUG_LOG debug;" "$CI_CONF"
-          head -5 "$CI_CONF"
+          # Inject error_log into the shared conf in-place — temporary
+          # mutation, only used for this CI step. -p sets the prefix so
+          # `include mime.types` resolves to /usr/local/openresty/...
+          sed -i "1i error_log $DEBUG_LOG debug;" ci/nginx/nginx.conf
+          head -5 ci/nginx/nginx.conf
           /usr/local/openresty/nginx/sbin/nginx \
-            -c "$CI_CONF" \
+            -p /usr/local/openresty/nginx \
+            -c "$PWD/ci/nginx/nginx.conf" \
             -e "$DEBUG_LOG" \
             -g "daemon on; pid $PID_FILE;"
           for i in $(seq 1 40); do nc -z 127.0.0.1 8090 && exit 0; sleep 0.5; done
