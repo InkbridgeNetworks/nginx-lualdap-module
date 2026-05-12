@@ -66,36 +66,49 @@ local function read_sse_event(tcp)
     end
 end
 
-function m:TestReadyEvent()
-    local tcp = open_sse('ldap-sse')
+-- Drain entries until the streamBegins marker arrives. Use this in
+-- tests that perform a 'do op -> expect SSE event' check: without it
+-- the op races against the syncrepl refresh phase and the per-entry
+-- event may be folded into refreshDone's queue-drain instead of
+-- arriving as a discrete entry.
+local function wait_for_stream_begins(tcp)
+    while true do
+        local ev = read_sse_event(tcp)
+        if ev == nil or ev == 'streamBegins' then return ev end
+    end
+end
+
+function m:TestStreamBeginsEvent()
+    -- Filter matches nothing so the refresh phase has zero entries and
+    -- streamBegins is the first event we see.
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(cn=__no_match_for_ready__)' }))
     local ev, data = read_sse_event(tcp)
     tcp:close()
-    luaunit.assertEquals(ev, 'ready')
+    luaunit.assertEquals(ev, 'streamBegins')
     luaunit.assertNotNil(data)
 end
 
-function m:TestReadyEventDataIsEmptyObject()
-    local tcp = open_sse('ldap-sse')
+function m:TestStreamBeginsEventDataIsEmptyObject()
+    local tcp = open_sse('ldap-sse?' .. qs({ filter = '(cn=__no_match_for_ready__)' }))
     local ev, data = read_sse_event(tcp)
     tcp:close()
-    luaunit.assertEquals(ev, 'ready')
+    luaunit.assertEquals(ev, 'streamBegins')
     luaunit.assertEquals(data, '{}')
 end
 
-function m:TestEntryEventAfterReady()
+function m:TestEntryEventDuringRefresh()
+    -- A filter that matches at least one existing entry yields an
+    -- entry event during the refresh phase before streamBegins fires.
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(objectClass=*)' }))
-    local ev1 = read_sse_event(tcp)
-    luaunit.assertEquals(ev1, 'ready')
-    local ev2, data = read_sse_event(tcp)
+    local ev, data = read_sse_event(tcp)
     tcp:close()
-    luaunit.assertEquals(ev2, 'entry')
+    luaunit.assertEquals(ev, 'entry')
     luaunit.assertStrContains(data, '"dn"')
 end
 
 function m:TestEntryDataContainsDn()
     -- ou=users always exists in the Bitnami tree.
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
-    read_sse_event(tcp)  -- ready
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'entry')
@@ -104,7 +117,6 @@ end
 
 function m:TestEntryDataContainsAttrs()
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(ou=users)' }))
-    read_sse_event(tcp)  -- ready
     local ev, data = read_sse_event(tcp)
     tcp:close()
     luaunit.assertEquals(ev, 'entry')
@@ -196,12 +208,14 @@ function m:TestRenameEventCount()
     -- emits during the rename (RFC 4533 modify-in-scope vs delete+add pair).
     local filter = '(|(cn=ci_sse_evcount_src)(cn=ci_sse_evcount_dst))'
     local tcp = open_sse('ldap-sse?' .. qs({ filter = filter }))
-    local ev1 = read_sse_event(tcp)
-    luaunit.assertEquals(ev1, 'ready')
 
-    -- Drain initial-sync entry for the src name.
-    local ev2 = read_sse_event(tcp)
-    luaunit.assertEquals(ev2, 'entry')
+    -- Drain refresh-phase entry for the src name, then wait for the
+    -- refresh->persist transition before issuing the rename; otherwise
+    -- the change can race the refresh phase and the per-entry
+    -- notification gets folded into the queue-drained refreshDone.
+    local ev1 = read_sse_event(tcp)
+    luaunit.assertEquals(ev1, 'entry')
+    luaunit.assertEquals(wait_for_stream_begins(tcp), 'streamBegins')
 
     self:sendRequest('GET', 'ldap-rename?' .. qs({
         dn           = SSE_SRC_DN,
@@ -239,11 +253,13 @@ function m:TestRenameAppearsAsEntryEvent()
         self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = SSE_DST_DN }))
     end)
 
-    -- Filter on the destination name: initial sync returns zero matches.
-    -- After the rename the entry enters scope and the server pushes it.
+    -- Filter on the destination name: initial sync returns zero matches,
+    -- so streamBegins is the first event we see (refresh phase has no
+    -- entries to emit). After the rename the entry enters scope and the
+    -- server pushes it.
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(cn=ci_sse_rename_dst)' }))
     local ev1 = read_sse_event(tcp)
-    luaunit.assertEquals(ev1, 'ready')
+    luaunit.assertEquals(ev1, 'streamBegins')
 
     self:sendRequest('GET', 'ldap-rename?' .. qs({
         dn           = SSE_SRC_DN,
@@ -280,14 +296,14 @@ function m:TestEntryUUIDOnDelete()
         filter = '(cn=ci_sse_delete_uuid)',
         attrs  = 'entryUUID',
     }))
-    local ev1 = read_sse_event(tcp)
-    luaunit.assertEquals(ev1, 'ready')
 
     -- Initial sync delivers the entry with its UUID via set_attribs.
-    local ev2, data2 = read_sse_event(tcp)
-    luaunit.assertEquals(ev2, 'entry')
-    local initial_uuid = data2:match('"entryUUID":"' .. UUID_PAT .. '"')
-    luaunit.assertNotNil(initial_uuid, 'no UUID in initial-sync entry: ' .. data2)
+    -- Then wait for the refresh->persist transition; see TestRenameEventCount.
+    local ev1, data1 = read_sse_event(tcp)
+    luaunit.assertEquals(ev1, 'entry')
+    local initial_uuid = data1:match('"entryUUID":"' .. UUID_PAT .. '"')
+    luaunit.assertNotNil(initial_uuid, 'no UUID in initial-sync entry: ' .. data1)
+    luaunit.assertEquals(wait_for_stream_begins(tcp), 'streamBegins')
 
     self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = DN }))
 
@@ -321,12 +337,13 @@ function m:TestPersistentSearchResumesFromCookie()
 
     self:sendRequest('GET', 'ldap-add?' .. qs({ dn = DN_A }))
 
-    -- First connection: full refresh, then trigger a delete to force the
+    -- First connection: full refresh delivers DN_A as an entry, then
+    -- the streamBegins marker, then we delete the entry to force the
     -- server to advance the cookie.
     local tcp = open_sse('ldap-sse?' .. qs({ filter = '(cn=ci_resume_a)' }))
-    luaunit.assertEquals(read_sse_event(tcp), 'ready')
     local ev1 = read_sse_event(tcp)
     luaunit.assertEquals(ev1, 'entry')
+    luaunit.assertEquals(wait_for_stream_begins(tcp), 'streamBegins')
 
     self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = DN_A }))
 
@@ -347,7 +364,6 @@ function m:TestPersistentSearchResumesFromCookie()
     local tcp2 = open_sse('ldap-sse?'
         .. 'filter=(|(cn=ci_resume_a)(cn=ci_resume_b))'
         .. '&cookie=' .. url_encode(cookie))
-    luaunit.assertEquals(read_sse_event(tcp2), 'ready')
 
     -- The server must replay DN_B (added after the cookie). DN_A was
     -- deleted before the cookie so it should NOT be replayed as add.
