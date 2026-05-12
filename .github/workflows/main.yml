@@ -201,21 +201,26 @@ jobs:
           exit 1
 
       #
-      #  Start nginx directly (rather than via nginx-service.sh) so we can
-      #  inject `error_log <path> debug;` via -g — debug-level logs are
-      #  essential for diagnosing syncrepl/persistent-search test failures.
-      #  Uses the system openresty install rather than the script's
-      #  default ./build/nginx/sbin/nginx (which doesn't exist in CI).
+      #  Start nginx directly (rather than via nginx-service.sh). We
+      #  splice an `error_log <path> debug;` directive into the conf via
+      #  sed so debug-level logs reliably go to a known location. -g
+      #  alone didn't get HTTP-subsystem debug entries written out.
       #
       - name: Tests - Start nginx
         run: |
           mkdir -p build/test/log build/test/run
           DEBUG_LOG="$PWD/build/test/log/debug.log"
           PID_FILE="$PWD/build/test/run/nginx.pid"
+          CI_CONF="$PWD/build/test/nginx.ci.conf"
+          # Copy the shared conf and inject error_log at the top so debug
+          # logs from every subsystem land in $DEBUG_LOG.
+          cp ci/nginx/nginx.conf "$CI_CONF"
+          sed -i "1i error_log $DEBUG_LOG debug;" "$CI_CONF"
+          head -5 "$CI_CONF"
           /usr/local/openresty/nginx/sbin/nginx \
-            -c "$PWD/ci/nginx/nginx.conf" \
+            -c "$CI_CONF" \
             -e "$DEBUG_LOG" \
-            -g "daemon on; pid $PID_FILE; error_log $DEBUG_LOG debug;"
+            -g "daemon on; pid $PID_FILE;"
           for i in $(seq 1 40); do nc -z 127.0.0.1 8090 && exit 0; sleep 0.5; done
           echo "ERROR: nginx did not bind 8090 in time" >&2
           tail -200 "$DEBUG_LOG" 2>/dev/null || true
