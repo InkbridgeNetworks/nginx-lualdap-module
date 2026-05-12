@@ -37,6 +37,28 @@ jobs:
         --add-dynamic-module=../
       openresty_base_url: https://openresty.org/download
       openresty_version: 1.27.1.1
+    #
+    #  GitHub Actions service mechanism gives us an OpenLDAP container
+    #  reachable as `openldap:389` from the runner container's docker
+    #  network. The runner image has no docker, so we can't drive
+    #  ldap-container.sh's `docker run` path here.
+    #
+    services:
+      openldap:
+        image: bitnamilegacy/openldap:latest
+        ports:
+          - 389:389
+        env:
+          LDAP_PORT_NUMBER: 389
+          LDAP_ROOT: dc=example,dc=org
+          LDAP_ADMIN_USERNAME: manager
+          LDAP_ADMIN_PASSWORD: password
+          LDAP_CONFIG_ADMIN_ENABLED: yes
+          LDAP_CONFIG_ADMIN_USERNAME: manager
+          LDAP_CONFIG_ADMIN_PASSWORD: password
+          LDAP_USERS: testuser
+          LDAP_PASSWORDS: testpass
+          LDAP_ENABLE_SYNCPROV: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -120,28 +142,77 @@ jobs:
         working-directory: openresty-${{ env.openresty_version }}
         run: sudo make install -j ${{ steps.cpu-cores.outputs.count }}
 
-      - name: Tests - Install Lua and test dependencies
+      - name: Tests - Install Lua, test deps, and tooling
         run: |
-          ${{ env.apt-install }} lua5.4 liblua5.4-dev luarocks ldap-utils
+          ${{ env.apt-install }} lua5.4 liblua5.4-dev luarocks ldap-utils socat netcat-openbsd
           sudo luarocks --lua-version 5.4 install --only-deps lualdap-nginx-tests-dev-1.rockspec
           # dapman-http-unit lives in a private sibling repo. Install it from
           # the Inkbridge LuaRocks server.
           sudo luarocks --lua-version 5.4 --server=https://luarocks.inkbridge.io/ install dapman-http-unit
 
+      - name: OpenLDAP - Wait for service
+        run: |
+          for i in $(seq 1 60); do
+            ldapsearch -H ldap://openldap:389 -D 'cn=manager,dc=example,dc=org' -w password -b dc=example,dc=org -s base >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          echo "ERROR: openldap did not become ready in time" >&2
+          exit 1
+
       #
-      #  ./run-tests.sh starts the LDAP container itself (via
-      #  ldap-container.sh, which uses `docker run`) and then nginx via
-      #  ./nginx-service.sh. The runner image is privileged so docker-in-
-      #  docker works. We override NGINX_BIN to point at the system install
-      #  rather than the script's default ./build/nginx/sbin/nginx.
+      #  Grant cn=testuser,ou=users write access to dc=example,dc=org. The
+      #  proxy_id tests bind as manager and use proxy authz to perform
+      #  writes as testuser; without this ACL the writes would fail.
+      #  Mirrors the bootstrap that ldap-container.sh applies via
+      #  docker exec / SASL EXTERNAL when the container is run locally.
       #
-      - name: Tests - Run lualdap test suite
+      - name: OpenLDAP - Apply testuser ACL
+        run: |
+          ldapmodify -H ldap://openldap:389 -D 'cn=manager,cn=config' -w password <<'EOF'
+          dn: olcDatabase={2}mdb,cn=config
+          changetype: modify
+          add: olcAccess
+          olcAccess: {0}to dn.subtree="dc=example,dc=org" by dn="cn=testuser,ou=users,dc=example,dc=org" write by * read
+          EOF
+
+      #
+      #  Endpoint configs and tests default to 127.0.0.1:1389. Forward that
+      #  to the openldap service so we don't have to plumb a host/port arg
+      #  through every test call.
+      #
+      - name: Tests - Forward LDAP to localhost:1389
+        run: |
+          socat TCP-LISTEN:1389,fork,reuseaddr TCP:openldap:389 &
+          for i in $(seq 1 10); do nc -z 127.0.0.1 1389 && exit 0; sleep 0.5; done
+          echo "ERROR: socat forwarder did not come up" >&2
+          exit 1
+
+      #
+      #  Start nginx in background. nginx-service.sh handles the prefix
+      #  setup; we point NGINX_BIN at the system install (rather than the
+      #  script's default ./build/nginx/sbin/nginx, which doesn't exist in
+      #  CI since openresty was built into ./openresty-1.27.1.1/).
+      #
+      - name: Tests - Start nginx
         env:
           NGINX_BIN: /usr/local/openresty/nginx/sbin/nginx
+        run: |
+          ./nginx-service.sh start bg
+          for i in $(seq 1 40); do nc -z 127.0.0.1 8090 && exit 0; sleep 0.5; done
+          echo "ERROR: nginx did not bind 8090 in time" >&2
+          tail -200 build/test/log/debug.log 2>/dev/null || true
+          exit 1
+
+      - name: Tests - Run lualdap test suite
+        env:
           LUA54: /usr/bin/lua5.4
         run: |
           eval "$(luarocks --lua-version 5.4 path)"
-          ./run-tests.sh
+          /usr/bin/lua5.4 bin/run_tests
+
+      - name: On Failure - Dump nginx debug log
+        if: failure()
+        run: tail -300 build/test/log/debug.log 2>/dev/null || true
 
       - name: "On Failure - Start tmate"
         uses: mxschmitt/action-tmate@v3
