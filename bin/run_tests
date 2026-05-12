@@ -1,6 +1,7 @@
 #!/usr/bin/env lua
 package.path = './tests/?.lua;' .. package.path
 
+local cqueues = require('cqueues')
 local luaunit = require('luaunit')
 local tester = require('dapman-http-unit')
 
@@ -13,4 +14,20 @@ for file in io.popen('ls -1 tests/'):lines() do
     end
 end
 
-os.exit(luaunit.LuaUnit.run())
+-- lua-http (used by dapman-http-unit) requires a cqueues coroutine context
+-- for its sockets to be able to wait/yield. Wrap the LuaUnit run so every
+-- test executes inside one.
+local cq = cqueues.new()
+local exit_code = 0
+
+cq:wrap(function()
+    exit_code = luaunit.LuaUnit.run()
+end)
+
+local ok, err = cq:loop()
+if not ok then
+    io.stderr:write('cqueues loop error: ' .. tostring(err) .. '\n')
+    os.exit(1)
+end
+
+os.exit(exit_code)
