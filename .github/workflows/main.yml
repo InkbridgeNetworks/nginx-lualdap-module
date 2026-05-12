@@ -228,7 +228,10 @@ jobs:
           LUA54: /usr/bin/${{ env.lua_bin }}
         run: |
           eval "$(luarocks --lua-version ${{ env.lua_version }} path)"
-          /usr/bin/${{ env.lua_bin }} bin/run_tests
+          # --verbose makes luaunit emit per-test status as it runs rather
+          # than buffering until the end; if a test hangs we can see which
+          # one in the live log.
+          /usr/bin/${{ env.lua_bin }} bin/run_tests --verbose
 
       - name: On Failure - Dump nginx debug log
         if: failure()
