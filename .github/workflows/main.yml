@@ -156,6 +156,12 @@ jobs:
           # dapman-http-unit lives in a private sibling repo. Install it from
           # the Inkbridge LuaRocks server.
           sudo luarocks --lua-version ${{ env.lua_version }} --server=https://luarocks.inkbridge.io/ install dapman-http-unit
+          # Cap the per-request HTTP timeout to 5s so a stuck endpoint
+          # surfaces fast rather than hanging the whole CI step. (Patches
+          # the installed copy directly; once dapman-http-unit reads its
+          # timeout from an env var this can become DAPMAN_HTTP_UNIT_TIMEOUT.)
+          sudo sed -i 's/^local test_timeout = .*/local test_timeout = 5/' \
+            /usr/local/share/lua/${{ env.lua_version }}/dapman-http-unit/init.lua
 
       - name: OpenLDAP - Wait for service
         run: |
@@ -211,6 +217,10 @@ jobs:
           exit 1
 
       - name: Tests - Run lualdap test suite
+        # Hard wall-clock cap. With 57 tests at <=5s per HTTP request,
+        # a healthy run takes well under a minute; if we're past 5 minutes
+        # something is genuinely hung and we'd rather fail fast.
+        timeout-minutes: 5
         env:
           # run-tests.sh reads LUA54 (the env var historically named for
           # the dev default Lua 5.4); set it from lua_bin so a future
