@@ -576,19 +576,33 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			LDAPMessage *entry = ldap_first_entry (conn->ld, msg);
 			int          attrs_idx;
 
-			push_dn(L, conn->ld, entry);
-			lua_newtable(L);
-			attrs_idx = lua_gettop(L);
-			set_attribs(L, conn->ld, entry, attrs_idx);
-			ret = 2;
-			/* Persistent searches carry a Sync State Control on every entry;
-			 * surface its state/UUID/cookie as a third return value, and drop
-			 * entryUUID from attrs since it now lives at the top level. */
-			if (search->type == SEARCH_TYPE_PERSISTENT
-			    && push_sync_meta(L, conn->ld, entry, search)) {
+			/*
+			 * Persistent searches yield self-describing tuples so callers
+			 * can drive iter() in a plain while loop without aliasing the
+			 * streamBegins marker to end-of-search. Non-persistent search
+			 * keeps the legacy (dn, attribs) shape.
+			 *
+			 * persistent:     ("entry", dn, attribs, meta?)
+			 * non-persistent: (dn, attribs)
+			 */
+			if (search->type == SEARCH_TYPE_PERSISTENT) {
+				lua_pushliteral(L, "entry");
+				push_dn(L, conn->ld, entry);
+				lua_newtable(L);
+				attrs_idx = lua_gettop(L);
+				set_attribs(L, conn->ld, entry, attrs_idx);
 				ret = 3;
-				lua_pushnil(L);
-				lua_setfield(L, attrs_idx, "entryUUID");
+				if (push_sync_meta(L, conn->ld, entry, search)) {
+					ret = 4;
+					lua_pushnil(L);
+					lua_setfield(L, attrs_idx, "entryUUID");
+				}
+			} else {
+				push_dn(L, conn->ld, entry);
+				lua_newtable(L);
+				attrs_idx = lua_gettop(L);
+				set_attribs(L, conn->ld, entry, attrs_idx);
+				ret = 2;
 			}
 			break;
 		}
@@ -638,17 +652,22 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 
 			if (refresh_done && search->type == SEARCH_TYPE_PERSISTENT) {
 				ngx_free(op_ctx);
-				lua_pushnil(L);		/* dn = nil */
-				lua_pushnil(L);		/* attribs = nil */
-				lua_newtable(L);	/* meta = {} */
+				/*
+				 * ("streamBegins", { syncCookie = ... })
+				 *
+				 * Tag first so callers can pattern-match the iterator's
+				 * message kind. End-of-search returns no values (= nil in
+				 * Lua), so iter() naturally terminates a plain while loop
+				 * without colliding with this marker.
+				 */
 				lua_pushliteral(L, "streamBegins");
-				lua_setfield(L, -2, "syncOp");
+				lua_newtable(L);
 				if (search->latest_cookie && search->latest_cookie->bv_val) {
 					lua_pushlstring(L, search->latest_cookie->bv_val,
 							 search->latest_cookie->bv_len);
 					lua_setfield(L, -2, "syncCookie");
 				}
-				return 3;
+				return 2;
 			}
 
 			conn->conn.connection->read->handler = ldap_socket_handler;
