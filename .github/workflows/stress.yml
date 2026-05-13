@@ -213,7 +213,14 @@ jobs:
             sed -i '1i master_process off;' ci/nginx/nginx.conf
           fi
           cat ci/nginx/conf.d/log.conf
-          export ASAN_OPTIONS="log_path=$ASAN_LOG:detect_leaks=1:abort_on_error=0:halt_on_error=0:print_stats=1:strict_string_checks=1:detect_stack_use_after_return=1"
+          # detect_odr_violation=0: nginx's main binary and every
+          # dynamic module each define a global called `ngx_modules`
+          # (the contract nginx uses to dlsym a module's list of
+          # registered modules). They have different content but the
+          # same symbol name, so ASan's ODR check fires - structurally,
+          # not because of any bug in our code. Suppress it; every
+          # other ASan / LSAN check stays on.
+          export ASAN_OPTIONS="log_path=$ASAN_LOG:detect_leaks=1:detect_odr_violation=0:abort_on_error=0:halt_on_error=0:print_stats=1:strict_string_checks=1:detect_stack_use_after_return=1"
           export LSAN_OPTIONS="log_path=$ASAN_LOG.lsan:print_suppressions=0:report_objects=1"
           # Background nginx so the workflow proceeds; track its pid
           # ourselves since master_process off means we don't get one
