@@ -1,0 +1,304 @@
+#
+#  Parallel CI workflow that runs the stress / chaos tests against an
+#  nginx built with AddressSanitizer + LeakSanitizer. Catches:
+#    - use-after-free / heap-buffer-overflow in the lualdap C code
+#    - leaks in the per-request cleanup paths (search abandon, conn
+#      teardown, proxy authz state)
+#
+#  Runs in parallel with the regular CI workflow - different concurrency
+#  group, different nginx build cache key. The stress build is larger
+#  (ASan instrumentation) and slower; we don't want it blocking the
+#  fast functional cycle.
+#
+name: "Stress"
+on: [push]
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+jobs:
+  stress:
+    timeout-minutes: 60
+    runs-on: self-hosted
+    container:
+      image: docker.internal.networkradius.com/self-hosted
+      options: >-
+        --privileged
+        --memory-swap -1
+    strategy:
+      fail-fast: false
+    env:
+      apt-install: sudo apt-get install -y --no-install-recommends
+      lua_version: "5.4"
+      #
+      #  Same configure args as the main CI workflow, plus
+      #  -fsanitize=address and -fno-omit-frame-pointer so the
+      #  resulting nginx binary catches memory errors in lualdap
+      #  C code. -O1 is the ASan-recommended optimisation level
+      #  (lower is unnecessarily slow, higher loses stack frames).
+      #
+      nginx_config_args: |
+        --prefix=/usr/local/openresty \
+        --conf-path=/etc/nginx/nginx.conf \
+        --error-log-path=/var/log/nginx/error.log \
+        --http-log-path=/var/log/nginx/access.log \
+        --user=root \
+        --group=root \
+        --with-http_ssl_module \
+        --with-file-aio \
+        --with-debug \
+        --with-pcre \
+        --with-pcre-jit \
+        --with-http_stub_status_module \
+        --with-http_auth_request_module \
+        --add-dynamic-module=../ \
+        --with-cc-opt='-O1 -g -fno-omit-frame-pointer -fsanitize=address' \
+        --with-ld-opt='-fsanitize=address'
+      openresty_base_url: https://openresty.org/download
+      openresty_version: 1.27.1.1
+    services:
+      openldap:
+        image: bitnamilegacy/openldap:latest
+        ports:
+          - 389:389
+        env:
+          LDAP_PORT_NUMBER: 389
+          LDAP_ROOT: dc=example,dc=org
+          LDAP_ADMIN_USERNAME: manager
+          LDAP_ADMIN_PASSWORD: password
+          LDAP_CONFIG_ADMIN_ENABLED: yes
+          LDAP_CONFIG_ADMIN_USERNAME: manager
+          LDAP_CONFIG_ADMIN_PASSWORD: password
+          LDAP_USERS: testuser
+          LDAP_PASSWORDS: testpass
+          LDAP_ENABLE_SYNCPROV: true
+    steps:
+      - name: Setup - Lua-version-derived env vars
+        run: echo "lua_bin=lua${{ env.lua_version }}" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+          submodules: recursive
+          fetch-depth: 100
+
+      #
+      #  Cache key includes the configure args, which include
+      #  -fsanitize=address - so this never shares state with the
+      #  non-ASan build cache from the main workflow.
+      #
+      - name: NGINX - Generate cache key hash
+        run: echo "CACHE_KEY=stress-$(echo "${{ runner.os }}-${{ env.openresty_version }}-${{ env.nginx_config_args }}" | sha256sum | cut -d ' ' -f1)" >> $GITHUB_ENV
+
+      - name: NGINX - Install basic dependencies
+        run: |
+          sudo apt-get update
+          ${{ env.apt-install }} \
+            build-essential \
+            devscripts \
+            equivs \
+            quilt \
+            clang \
+            llvm \
+            lldb \
+            strace
+          ${{ env.apt-install }} \
+            perl \
+            libpcre3-dev \
+            libssl-dev \
+            libpqxx-dev \
+            libpq-dev \
+            libldap-dev \
+            zlib1g-dev
+
+      - name: Get number of CPU cores
+        uses: SimenB/github-actions-cpu-cores@v3
+        id: cpu-cores
+
+      - name: NGINX - Restore build directory
+        id: nginx-build-restore
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ github.workspace }}/openresty-${{ env.openresty_version }}
+          key: ${{ env.CACHE_KEY }}
+
+      - name: NGINX - Download (if not cached)
+        if: steps.nginx-build-restore.outputs.cache-hit != 'true'
+        run: |
+          wget ${{ env.openresty_base_url }}/openresty-${{ env.openresty_version }}.tar.gz
+          tar -xzf openresty-${{ env.openresty_version }}.tar.gz
+
+      - name: NGINX - Configure
+        if: steps.nginx-build-restore.outputs.cache-hit != 'true'
+        working-directory: openresty-${{ env.openresty_version }}
+        run: |
+          MAKEFLAGS="-j ${{ steps.cpu-cores.outputs.count }}" ./configure ${{ env.nginx_config_args }}
+
+      - name: NGINX - Cache build state
+        if: steps.nginx-build-restore.outputs.cache-hit != 'true'
+        id: nginx-build-store
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ github.workspace }}/openresty-${{ env.openresty_version  }}
+          key: ${{ env.CACHE_KEY }}
+
+      - name: NGINX - Build
+        working-directory: openresty-${{ env.openresty_version }}
+        run: make -j ${{ steps.cpu-cores.outputs.count }}
+
+      - name: NGINX - Install
+        working-directory: openresty-${{ env.openresty_version }}
+        run: sudo make install -j ${{ steps.cpu-cores.outputs.count }}
+
+      - name: Tests - Install Lua, test deps, and tooling
+        run: |
+          ${{ env.apt-install }} ${{ env.lua_bin }} liblua${{ env.lua_version }}-dev luarocks ldap-utils socat netcat-openbsd
+          sudo luarocks --lua-version ${{ env.lua_version }} install --only-deps lualdap-nginx-tests-dev-1.rockspec
+          sudo luarocks --lua-version ${{ env.lua_version }} --server=https://luarocks.inkbridge.io/ install dapman-http-unit
+          # Stress run can hold an HTTP request open for longer than a
+          # functional test: 10s budget keeps the harness honest without
+          # cutting off a legitimately slow drain.
+          sudo sed -i 's/^local test_timeout = .*/local test_timeout = 10/' \
+            /usr/local/share/lua/${{ env.lua_version }}/dapman-http-unit/init.lua
+
+      - name: OpenLDAP - Wait for service
+        run: |
+          for i in $(seq 1 60); do
+            ldapsearch -H ldap://openldap:389 -D 'cn=manager,dc=example,dc=org' -w password -b dc=example,dc=org -s base >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          echo "ERROR: openldap did not become ready in time" >&2
+          exit 1
+
+      - name: OpenLDAP - Apply testuser ACL
+        run: |
+          ldapmodify -H ldap://openldap:389 -D 'cn=manager,cn=config' -w password <<'EOF'
+          dn: olcDatabase={2}mdb,cn=config
+          changetype: modify
+          add: olcAccess
+          olcAccess: {0}to dn.subtree="dc=example,dc=org" by dn="cn=testuser,ou=users,dc=example,dc=org" write by * read
+          EOF
+
+      - name: Tests - Forward LDAP to localhost:1389
+        run: |
+          socat TCP-LISTEN:1389,fork,reuseaddr TCP:openldap:389 &
+          for i in $(seq 1 10); do nc -z 127.0.0.1 1389 && exit 0; sleep 0.5; done
+          echo "ERROR: socat forwarder did not come up" >&2
+          exit 1
+
+      #
+      #  Start nginx with ASan + LSAN options. Notes:
+      #    - master_process off keeps everything in one PID so leak
+      #      reports at process exit aren't fragmented across workers.
+      #    - daemon off makes the foreground-shell trick (& + wait)
+      #      possible; pid file still works for the post-mortem.
+      #    - print_stats=1 dumps allocator stats at exit so we can
+      #      eyeball whether a run accumulates objects (potential leak
+      #      pattern even when LSAN's heuristics miss it).
+      #    - halt_on_error=0 lets the test suite finish even if one
+      #      iteration triggers an ASan report; we'd rather see the
+      #      full picture than stop at the first error.
+      #
+      - name: Tests - Start nginx (under ASan)
+        run: |
+          mkdir -p build/test/log build/test/run
+          DEBUG_LOG="$PWD/build/test/log/debug.log"
+          ASAN_LOG="$PWD/build/test/log/asan.log"
+          PID_FILE="$PWD/build/test/run/nginx.pid"
+          sed -i "s|error_log .*|error_log $DEBUG_LOG debug;|" ci/nginx/conf.d/log.conf
+          # Force single-process so leak reports aren't split.
+          if ! grep -q "^master_process" ci/nginx/nginx.conf; then
+            sed -i '1i master_process off;' ci/nginx/nginx.conf
+          fi
+          cat ci/nginx/conf.d/log.conf
+          export ASAN_OPTIONS="log_path=$ASAN_LOG:detect_leaks=1:abort_on_error=0:halt_on_error=0:print_stats=1:strict_string_checks=1:detect_stack_use_after_return=1"
+          export LSAN_OPTIONS="log_path=$ASAN_LOG.lsan:print_suppressions=0:report_objects=1"
+          # Background nginx so the workflow proceeds; track its pid
+          # ourselves since master_process off means we don't get one
+          # written to the file.
+          /usr/local/openresty/nginx/sbin/nginx \
+            -p /usr/local/openresty/nginx \
+            -c "$PWD/ci/nginx/nginx.conf" \
+            -e "$DEBUG_LOG" \
+            -g "daemon off; pid $PID_FILE;" &
+          echo $! > "$PID_FILE"
+          for i in $(seq 1 60); do nc -z 127.0.0.1 8090 && exit 0; sleep 0.5; done
+          echo "ERROR: nginx (ASan) did not bind 8090 in time" >&2
+          tail -200 "$DEBUG_LOG" 2>/dev/null || true
+          ls -la "$ASAN_LOG"* 2>/dev/null || true
+          cat "$ASAN_LOG"* 2>/dev/null || true
+          exit 1
+
+      - name: Tests - Pre-flight nginx health check
+        run: |
+          ss -ltnp 2>/dev/null | grep 8090 || true
+          ps -ef | grep -E '[n]ginx' || true
+          curl -sS -m 3 -o /tmp/nginx_status.out -w "HTTP %{http_code}\n" http://127.0.0.1:8090/nginx_status || echo "curl failed: $?"
+          cat /tmp/nginx_status.out 2>/dev/null || true
+
+      #
+      #  Run the stress suite. STRESS_TESTS=1 unblocks tests/stress.lua;
+      #  it's a no-op when unset. The 30-minute cap covers a 10K LDIF
+      #  inject (~30s) plus three torture loops at 50 iterations each
+      #  with some buffer.
+      #
+      - name: Tests - Run stress suite
+        timeout-minutes: 30
+        env:
+          LUA54: /usr/bin/${{ env.lua_bin }}
+          TEST_PORT: 8090
+          STRESS_TESTS: "1"
+          STRESS_LDAP_HOST: "openldap"
+          STRESS_LDAP_PORT: "389"
+        run: |
+          eval "$(luarocks --lua-version ${{ env.lua_version }} path)"
+          /usr/bin/${{ env.lua_bin }} bin/run_tests --verbose
+
+      - name: Always - Stop nginx + capture ASan reports
+        if: always()
+        run: |
+          DEBUG_LOG="$PWD/build/test/log/debug.log"
+          ASAN_LOG="$PWD/build/test/log/asan.log"
+          PID_FILE="$PWD/build/test/run/nginx.pid"
+          echo "--- post-test nginx state ---"
+          ss -ltnp 2>/dev/null | grep 8090 || echo "(nothing on 8090)"
+          ps -ef | grep -E '[n]ginx' || echo "(no nginx process)"
+          # SIGTERM nginx so it exits cleanly through ASan's atexit
+          # hook - that's when the leak summary prints.
+          if [ -f "$PID_FILE" ]; then
+            kill -TERM "$(cat "$PID_FILE")" 2>/dev/null || true
+            # Give ASan up to 30s to flush its report.
+            for i in $(seq 1 30); do
+              kill -0 "$(cat "$PID_FILE")" 2>/dev/null || break
+              sleep 1
+            done
+            kill -KILL "$(cat "$PID_FILE")" 2>/dev/null || true
+          fi
+          echo "--- ASan / LSAN reports ---"
+          ls -la "$ASAN_LOG"* 2>/dev/null || echo "(none)"
+          echo "--- ASan summary (first 200 lines per file) ---"
+          for f in "$ASAN_LOG"*; do
+            [ -f "$f" ] || continue
+            echo "==> $f <=="
+            head -200 "$f"
+          done
+          if [ -f "$DEBUG_LOG" ]; then
+            grep -vE "worker cycle|epoll timer:|epoll: fd|timer delta:" "$DEBUG_LOG" > "$DEBUG_LOG.filtered" 2>/dev/null || true
+          fi
+          mkdir -p build/test/log
+          cp /var/log/nginx/error.log build/test/log/system-error.log 2>/dev/null || true
+
+      - name: Always - Upload nginx + ASan logs
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: stress-asan-logs
+          path: |
+            build/test/log/debug.log
+            build/test/log/debug.log.filtered
+            build/test/log/system-error.log
+            build/test/log/asan.log*
+          if-no-files-found: warn
+          retention-days: 14
