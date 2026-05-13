@@ -105,11 +105,12 @@ typedef struct {
 	struct berval	*latest_cookie;		//!< Most recent syncCookie seen on this persistent search;
 						//!< updated from per-entry Sync State Control and from
 						//!< intermediate syncInfoMessages, freed in search_close.
-	ngx_pool_cleanup_t *pool_cleanup;	//!< Per-request cleanup hook that abandons this search
+	ngx_pool_cleanup_t *pool_cleanup;	//!< Per-request cleanup hook that abandons the search
 						//!< when the request pool is destroyed (covers abrupt
-						//!< client disconnect / handler kill / lua error). Cleared
-						//!< by search_close so we don't double-abandon when the
-						//!< search ends normally before the request does.
+						//!< client disconnect / handler kill / lua error /
+						//!< ngx.exit). Disarmed by search_close so we don't
+						//!< double-abandon when the search ends normally before
+						//!< the request does.
 } search_data_t;
 
 /** LDAP attribute modification structure
@@ -1212,7 +1213,11 @@ static int lualdap_search_close(lua_State *L) {
  */
 static search_data_t *create_search(lua_State *L, int conn_index, int msgid, struct berval *cookie, search_type_t type)
 {
-	search_data_t *search = (search_data_t *)lua_newuserdata (L, sizeof (search_data_t));
+	search_data_t      *search;
+	conn_data          *conn;
+	ngx_http_request_t *r;
+
+	search = (search_data_t *)lua_newuserdata (L, sizeof (search_data_t));
 	lualdap_setmeta(L, LUALDAP_SEARCH_METATABLE);
 	search->conn = LUA_NOREF;
 	search->msgid = msgid;
@@ -1222,8 +1227,36 @@ static search_data_t *create_search(lua_State *L, int conn_index, int msgid, str
 	search->latest_cookie = NULL;
 	search->pool_cleanup = NULL;
 
+	conn = (conn_data *)lua_touserdata(L, conn_index);
+
 	lua_pushvalue(L, conn_index);
 	search->conn = luaL_ref(L, LUA_REGISTRYINDEX);
+
+	/*
+	 * Register a per-request pool cleanup that abandons this search if
+	 * Lua never reaches search_close. Every search has server-side state
+	 * worth tearing down on abrupt request death:
+	 *   - oneshot (NORMAL): server is still walking the result set
+	 *   - paged: server is holding the page cursor
+	 *   - persistent: server has a live syncrepl session
+	 *
+	 * search_close (called from __gc or explicit cleanup) NULLs the
+	 * handler so the normal-exit path doesn't double-abandon.
+	 */
+	r = ngx_http_lua_get_req(L);
+	if (r && conn) {
+		ngx_pool_cleanup_t    *cln;
+		search_pool_cleanup_t *pc;
+
+		cln = ngx_pool_cleanup_add(r->pool, sizeof(*pc));
+		if (cln) {
+			pc = cln->data;
+			pc->conn = conn;
+			pc->msgid = msgid;
+			cln->handler = search_pool_cleanup_handler;
+			search->pool_cleanup = cln;
+		}
+	}
 
 	return search;
 }
@@ -1430,31 +1463,6 @@ static int lualdap_search_persistent(lua_State *L)
 		 * or pre-checkpoint entries are stamped with at least the input
 		 * cookie until the server issues a fresher one. */
 		if (cookie) s->latest_cookie = ber_bvdup(cookie);
-
-		/*
-		 * Register a per-request pool cleanup. Persistent searches leave
-		 * server-side syncrepl state attached to the LDAP connection,
-		 * and the cosocket can be returned to the pool while that state
-		 * is still live. The pool cleanup guarantees ldap_abandon fires
-		 * when the request finalises - on any path: normal completion,
-		 * abrupt client disconnect, lua error, ngx.exit, worker shutdown.
-		 *
-		 * Disarmed by search_close (NULLs the handler) when the search
-		 * ends normally before the request does.
-		 */
-		{
-			ngx_pool_cleanup_t    *cln;
-			search_pool_cleanup_t *pc;
-
-			cln = ngx_pool_cleanup_add(r->pool, sizeof(*pc));
-			if (cln) {
-				pc = cln->data;
-				pc->conn = conn;
-				pc->msgid = msgid;
-				cln->handler = search_pool_cleanup_handler;
-				s->pool_cleanup = cln;
-			}
-		}
 	}
 	lua_pushvalue (L, -1);
 	lua_pushcclosure(L, next_message, 1);	/* This is the ierator the caller can use to page out results */
