@@ -952,27 +952,38 @@ static void push_dn(lua_State *L, LDAP *ld, LDAPMessage *entry) {
 }
 
 /*
- * Per-request pool cleanup payload for an in-flight persistent search.
+ * Per-request pool cleanup payload for an in-flight search.
  *
  * Lives in r->pool memory: same lifetime as the cleanup itself, so the
  * pointer is always valid when the cleanup fires. Holds conn (the LDAP
  * handle owner) and msgid; the cleanup checks conn->ld is still bound
  * before sending abandon.
  *
- * conn_data is a Lua userdata - safe to dereference here because pool
- * cleanups run during request finalisation, which happens before the
- * Lua VM gets a chance to GC this request's locals.
+ * The back-pointer to search lets the handler NULL out
+ * search->pool_cleanup before the pool memory is freed. Without it,
+ * a search_close that fires from __gc *after* the request has been
+ * finalised would dereference a dangling pool-cleanup pointer.
+ *
+ * conn_data and search_data_t are both Lua userdata - safe to
+ * dereference here because pool cleanups run during request
+ * finalisation, which happens before the Lua VM gets a chance to GC
+ * this request's locals.
  */
 typedef struct {
-	conn_data *conn;
-	int        msgid;
+	conn_data     *conn;
+	int            msgid;
+	search_data_t *search;
 } search_pool_cleanup_t;
 
 /*
  * Pool cleanup handler: abandon the search if its connection is still
- * up. search_close NULLs out our handler when the search ends normally,
- * so by the time we run, either the request died abruptly (Lua never
- * called search_close, abandon is overdue) or this is a no-op.
+ * up, then sever the search's pointer back to us so the now-freed
+ * cleanup struct is never dereferenced from a later search_close.
+ *
+ * search_close NULLs our handler when the search ends normally before
+ * the request, so by the time we fire either the request died abruptly
+ * (Lua never reached search_close, abandon is overdue) or this is a
+ * no-op left in place by the disarm.
  */
 static void search_pool_cleanup_handler(void *data)
 {
@@ -980,6 +991,9 @@ static void search_pool_cleanup_handler(void *data)
 
 	if (pc->conn && pc->conn->ld) {
 		ldap_abandon(pc->conn->ld, pc->msgid);
+	}
+	if (pc->search) {
+		pc->search->pool_cleanup = NULL;
 	}
 }
 
@@ -1253,6 +1267,7 @@ static search_data_t *create_search(lua_State *L, int conn_index, int msgid, str
 			pc = cln->data;
 			pc->conn = conn;
 			pc->msgid = msgid;
+			pc->search = search;
 			cln->handler = search_pool_cleanup_handler;
 			search->pool_cleanup = cln;
 		}
