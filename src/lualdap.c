@@ -1563,6 +1563,7 @@ static int lualdap_createmeta (lua_State *L) {
 	};
 
 	const luaL_Reg search_methods[] = {
+		{"close", lualdap_search_close},
 		{"more_pages", lualdap_more_pages},
 		{NULL, NULL}
 	};
