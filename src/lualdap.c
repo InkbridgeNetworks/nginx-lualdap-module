@@ -105,6 +105,11 @@ typedef struct {
 	struct berval	*latest_cookie;		//!< Most recent syncCookie seen on this persistent search;
 						//!< updated from per-entry Sync State Control and from
 						//!< intermediate syncInfoMessages, freed in search_close.
+	ngx_pool_cleanup_t *pool_cleanup;	//!< Per-request cleanup hook that abandons this search
+						//!< when the request pool is destroyed (covers abrupt
+						//!< client disconnect / handler kill / lua error). Cleared
+						//!< by search_close so we don't double-abandon when the
+						//!< search ends normally before the request does.
 } search_data_t;
 
 /** LDAP attribute modification structure
@@ -946,6 +951,38 @@ static void push_dn(lua_State *L, LDAP *ld, LDAPMessage *entry) {
 }
 
 /*
+ * Per-request pool cleanup payload for an in-flight persistent search.
+ *
+ * Lives in r->pool memory: same lifetime as the cleanup itself, so the
+ * pointer is always valid when the cleanup fires. Holds conn (the LDAP
+ * handle owner) and msgid; the cleanup checks conn->ld is still bound
+ * before sending abandon.
+ *
+ * conn_data is a Lua userdata - safe to dereference here because pool
+ * cleanups run during request finalisation, which happens before the
+ * Lua VM gets a chance to GC this request's locals.
+ */
+typedef struct {
+	conn_data *conn;
+	int        msgid;
+} search_pool_cleanup_t;
+
+/*
+ * Pool cleanup handler: abandon the search if its connection is still
+ * up. search_close NULLs out our handler when the search ends normally,
+ * so by the time we run, either the request died abruptly (Lua never
+ * called search_close, abandon is overdue) or this is a no-op.
+ */
+static void search_pool_cleanup_handler(void *data)
+{
+	search_pool_cleanup_t *pc = data;
+
+	if (pc->conn && pc->conn->ld) {
+		ldap_abandon(pc->conn->ld, pc->msgid);
+	}
+}
+
+/*
 ** Release connection reference.
 */
 static void search_close(lua_State *L, search_data_t *search)
@@ -957,6 +994,18 @@ static void search_close(lua_State *L, search_data_t *search)
 	if (search->latest_cookie != NULL) {
 		ber_bvfree(search->latest_cookie);
 		search->latest_cookie = NULL;
+	}
+
+	/*
+	 * Disarm the per-request pool cleanup. Setting handler to NULL is
+	 * the documented way to neuter a registered ngx_pool_cleanup_t -
+	 * the pool destructor still walks the cleanup list when the request
+	 * finalises, but skips entries with no handler. Without this we'd
+	 * double-abandon when the search ends normally before the request.
+	 */
+	if (search->pool_cleanup) {
+		search->pool_cleanup->handler = NULL;
+		search->pool_cleanup = NULL;
 	}
 
 	switch (search->type) {
@@ -1171,6 +1220,7 @@ static search_data_t *create_search(lua_State *L, int conn_index, int msgid, str
 	search->type = type;
 	search->morePages = FALSE;
 	search->latest_cookie = NULL;
+	search->pool_cleanup = NULL;
 
 	lua_pushvalue(L, conn_index);
 	search->conn = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -1380,6 +1430,31 @@ static int lualdap_search_persistent(lua_State *L)
 		 * or pre-checkpoint entries are stamped with at least the input
 		 * cookie until the server issues a fresher one. */
 		if (cookie) s->latest_cookie = ber_bvdup(cookie);
+
+		/*
+		 * Register a per-request pool cleanup. Persistent searches leave
+		 * server-side syncrepl state attached to the LDAP connection,
+		 * and the cosocket can be returned to the pool while that state
+		 * is still live. The pool cleanup guarantees ldap_abandon fires
+		 * when the request finalises - on any path: normal completion,
+		 * abrupt client disconnect, lua error, ngx.exit, worker shutdown.
+		 *
+		 * Disarmed by search_close (NULLs the handler) when the search
+		 * ends normally before the request does.
+		 */
+		{
+			ngx_pool_cleanup_t    *cln;
+			search_pool_cleanup_t *pc;
+
+			cln = ngx_pool_cleanup_add(r->pool, sizeof(*pc));
+			if (cln) {
+				pc = cln->data;
+				pc->conn = conn;
+				pc->msgid = msgid;
+				cln->handler = search_pool_cleanup_handler;
+				s->pool_cleanup = cln;
+			}
+		}
 	}
 	lua_pushvalue (L, -1);
 	lua_pushcclosure(L, next_message, 1);	/* This is the ierator the caller can use to page out results */
