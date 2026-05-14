@@ -6,5 +6,5 @@
 *.rock
 build
 openresty
-openresty-*.tar.gz
+openresty-*
 ci/nginx/conf.d/default.conf
