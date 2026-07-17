@@ -54,7 +54,7 @@ jobs:
         --with-cc-opt='-O1 -g -fno-omit-frame-pointer -fsanitize=address' \
         --with-ld-opt='-fsanitize=address'
       openresty_base_url: https://openresty.org/download
-      openresty_version: 1.27.1.1
+      openresty_version: 1.31.1.1
     services:
       openldap:
         image: bitnamilegacy/openldap:latest

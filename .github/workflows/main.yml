@@ -40,7 +40,7 @@ jobs:
         --with-http_auth_request_module \
         --add-dynamic-module=../
       openresty_base_url: https://openresty.org/download
-      openresty_version: 1.27.1.1
+      openresty_version: 1.31.1.1
     #
     #  GitHub Actions service mechanism gives us an OpenLDAP container
     #  reachable as `openldap:389` from the runner container's docker
