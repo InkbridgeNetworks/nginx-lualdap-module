@@ -78,11 +78,16 @@ function m:TestBadBase()
 end
 
 function m:TestSizelimit()
-    -- With sizelimit=1, at most one entry should come back even for a broad filter.
+    -- With sizelimit=1 the server sends one entry and then ends the search
+    -- with sizeLimitExceeded (4). The iterator delivers the entry, then
+    -- returns (nil, err, 4), so the caller sees both the entries and the
+    -- reason the list stopped.
     local headers, json = self:sendRequest('GET',
         'ldap-search?' .. qs({ base = BASE, scope = 'sub', filter = '(objectClass=*)', sizelimit = 1 }))
     luaunit.assertEquals(headers:get(':status'), 200)
-    luaunit.assertEquals(json.ok, true)
+    luaunit.assertEquals(json.ok, false)
+    luaunit.assertEquals(json.code, 4)
+    luaunit.assertStrContains(json.err, 'Size limit exceeded')
     luaunit.assertNotNil(json.entries)
     luaunit.assertEquals(#json.entries, 1)
 end
