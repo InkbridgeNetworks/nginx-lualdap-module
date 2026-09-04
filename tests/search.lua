@@ -66,11 +66,15 @@ function m:TestOneLevelScope()
 end
 
 function m:TestBadBase()
-    -- An unknown base may return an LDAP error or empty results depending on server config;
-    -- either way the response must be valid JSON with an ok field.
+    -- The server ends a search with noSuchObject (32) when the base entry
+    -- does not exist. The iterator returns (nil, err, 32) instead of the
+    -- bare nil that marks the end of the entries.
     local headers, json = self:sendRequest('GET',
-        'ldap-search?' .. qs({ base = 'cn=__bad__,dc=invalid', scope = 'sub', filter = '(objectClass=*)' }))
-    luaunit.assertNotNil(json.ok)
+        'ldap-search?' .. qs({ base = 'cn=__bad__,' .. BASE, scope = 'sub', filter = '(objectClass=*)' }))
+    luaunit.assertEquals(headers:get(':status'), 200)
+    luaunit.assertEquals(json.ok, false)
+    luaunit.assertEquals(json.code, 32)
+    luaunit.assertStrContains(json.err, 'No such object')
 end
 
 function m:TestSizelimit()

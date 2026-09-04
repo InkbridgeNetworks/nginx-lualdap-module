@@ -184,12 +184,15 @@ operation. The only exception is the <code>compare</code> function
 which can return either <code>true</code> or <code>false</code>
 (as the result of the comparison) on a successful operation.</p>
 
-<p>There are two types of errors: <em>API errors</em>, such as
-wrong parameters, absent connection etc.; and <em>LDAP errors</em>,
-such as malformed DN, unknown attribute etc. API errors will raise
-a Lua error, while LDAP errors will be reported by the
-function/method returning <code>nil</code> plus the error
-message provided by the OpenLDAP client.</p>
+<p>The library reports two types of errors. An <em>API error</em>, such as
+a wrong parameter or a closed connection, raises a Lua error. An
+<em>LDAP error</em>, such as a malformed DN or an unknown attribute, makes
+the function that obtains the result return three values:
+<code>nil</code>, the error message from the OpenLDAP client, and the
+numeric LDAP result code (RFC 4511 section 4.1.9). OpenLDAP reports a
+client-side error with a negative result code. A search iterator returns
+the same three values when the server ends the search with an error, for
+example noSuchObject (32) when the base entry does not exist.</p>
 
 <p>A connection object can be created by calling the <a href=
 "#initialization">Initialization function</a>.</p>

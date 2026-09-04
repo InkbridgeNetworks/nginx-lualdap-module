@@ -227,6 +227,20 @@ static int faildirect (lua_State *L, const char *errmsg) {
 }
 
 
+/** Push nil, the `ldap_err2string` message for `rc`, and `rc` itself
+ *
+ * A caller returns the count that failcode returns, so Lua receives
+ * (nil, err, code), the same three values that an operation result
+ * function returns for an LDAP error.
+ */
+static int failcode (lua_State *L, int rc) {
+	lua_pushnil (L);
+	lua_pushstring (L, ldap_err2string (rc));
+	lua_pushnumber (L, rc);
+	return 3;
+}
+
+
 /** Retrieve a connection object from the first stack position
  *
  * @note Does not modify the lua stack, just verifies that the first
@@ -699,7 +713,7 @@ static int lualdap_add(lua_State *L) {
 	*ctrls_p = NULL;
 
 	rc = ldap_add_ext(conn->ld, dn, attrs.attrs, ctrls, NULL, &msgid);
-	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
+	if (rc != LDAP_SUCCESS) return failcode(L, rc);
 
 	result_closure_push(L, msgid, LDAP_RES_ADD);
 	return 1;
@@ -737,7 +751,7 @@ static int lualdap_compare (lua_State *L) {
 	*ctrls_p = NULL;
 
 	rc = ldap_compare_ext (conn->ld, dn, attr, &bvalue, ctrls, NULL, &msgid);
-	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
+	if (rc != LDAP_SUCCESS) return failcode(L, rc);
 
 	result_closure_push(L, msgid, LDAP_RES_COMPARE);
 	return 1;
@@ -769,7 +783,7 @@ static int lualdap_delete (lua_State *L)
 	*ctrls_p = NULL;
 
 	rc = ldap_delete_ext (conn->ld, dn, ctrls, NULL, &msgid);
-	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
+	if (rc != LDAP_SUCCESS) return failcode(L, rc);
 
 	result_closure_push(L, msgid, LDAP_RES_DELETE);
 	return 1;
@@ -845,7 +859,7 @@ static int lualdap_modify (lua_State *L) {
 	*ctrls_p = NULL;
 
 	rc = ldap_modify_ext (conn->ld, dn, attrs.attrs, ctrls, NULL, &msgid);
-	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
+	if (rc != LDAP_SUCCESS) return failcode(L, rc);
 
 	result_closure_push(L, msgid, LDAP_RES_MODIFY);
 	return 1;
@@ -887,7 +901,7 @@ static int lualdap_rename (lua_State *L) {
 	*ctrls_p = NULL;
 
 	rc = ldap_rename(conn->ld, dn, rdn, par, del, ctrls, NULL, &msgid);
-	if (rc != LDAP_SUCCESS) return faildirect(L, ldap_err2string(rc));
+	if (rc != LDAP_SUCCESS) return failcode(L, rc);
 
 	result_closure_push(L, msgid, LDAP_RES_MODDN);
 	return 1;

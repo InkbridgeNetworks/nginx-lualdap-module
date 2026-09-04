@@ -38,6 +38,7 @@ static int ngx_http_lua_socket_read_error_retval_handler(ngx_http_request_t *r, 
  * Forward declaration of functions in lualdap.c
  */
 static int faildirect (lua_State *L, const char *errmsg);
+static int failcode (lua_State *L, int rc);
 static search_data_t *getsearch (lua_State *L);
 static void lualdap_setmeta (lua_State *L, const char *name);
 static void set_attribs (lua_State *L, LDAP *ld, LDAPMessage *entry, int tab);
@@ -352,7 +353,7 @@ ldap_operation_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket
 
 	rc = ldap_parse_result(conn->ld, op_ctx->res, &err, &mdn, &msg, NULL, NULL, 1);
 	if (rc != LDAP_SUCCESS)
-		return faildirect(L, ldap_err2string (rc));
+		return failcode(L, rc);
 
 	switch (err) {
 	case LDAP_SUCCESS:
@@ -537,10 +538,43 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 	// Check status of last call to ldap_result
 	if (op_ctx->ldap_rc == LDAP_RES_SEARCH_RESULT) { /* last message => nil */
 		int rc;
+		char *msg = NULL;
 
-		ldap_parse_result(conn->ld, op_ctx->res, &rc, NULL, NULL, NULL, &returnedControls, 0);
+		ldap_parse_result(conn->ld, op_ctx->res, &rc, NULL, &msg, NULL, &returnedControls, 0);
 
 		ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "Search result %d (%s)", rc, ldap_err2string(rc));
+
+		/*
+		 * The server ended the search with an error, for example noSuchObject
+		 * on the base, sizeLimitExceeded, or insufficientAccessRights. Return
+		 * (nil, err, code) to Lua, the same three values that an operation
+		 * result function returns for an LDAP error, instead of the bare nil
+		 * that marks the end of the entries.
+		 */
+		if (rc != LDAP_SUCCESS) {
+			int nb_strings = 2;
+
+			if (returnedControls) ldap_controls_free(returnedControls);
+			search_close (L, search);
+
+			lua_pushnil (L);
+			lua_pushliteral (L, LUALDAP_PREFIX);
+			if (msg && *msg) {
+				lua_pushstring (L, msg);
+				lua_pushliteral (L, " ");
+				nb_strings = 4;
+			}
+			lua_pushstring (L, ldap_err2string(rc));
+			lua_concat (L, nb_strings);
+			lua_pushnumber (L, rc);
+			ldap_memfree(msg);
+
+			ldap_msgfree(op_ctx->res);
+			op_ctx->res = NULL;
+			ngx_free(op_ctx);
+			return 3;
+		}
+		ldap_memfree(msg);
 
 		if (search->cookie != NULL) {
 			ber_bvfree(search->cookie);
@@ -1195,7 +1229,7 @@ static int lualdap_init_fd(lua_State *L) {
 		rc = ldap_sasl_bind(conn->ld, user ? (const char *) user : "", sasl_mech, &cred, NULL, NULL, &msgid);
 		if (rc != LDAP_SUCCESS) {
 			ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX "Bind failed immediately");
-			return faildirect(L, ldap_err2string(rc));
+			return failcode(L, rc);
 		}
 	}
 
