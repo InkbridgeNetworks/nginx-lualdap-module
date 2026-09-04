@@ -1772,11 +1772,25 @@ static void set_info (lua_State *L) {
  *
  *
  */
+/** Return the libldap message for an LDAP result code
+ *
+ * Lua: lualdap.err2string(code) returns the string that ldap_err2string
+ * gives for code, so a caller can name a code it received as the third
+ * return value of an operation result or search iterator.
+ */
+static int lualdap_err2string (lua_State *L) {
+	int rc = (int) luaL_checkinteger (L, 1);
+
+	lua_pushstring (L, ldap_err2string (rc));
+	return 1;
+}
+
 int luaopen_ngx_lualdap (lua_State *L) {
 	/* Each entry in this table registers a method callable from Lua */
 	struct luaL_Reg lualdap[] = {
 		{"init", lualdap_init},			/* */
 		{"get_fd", lualdap_get_fd},
+		{"err2string", lualdap_err2string},
 		{NULL, NULL},
 	};
 
