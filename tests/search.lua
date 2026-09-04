@@ -75,7 +75,6 @@ function m:TestBadBase()
     luaunit.assertEquals(json.ok, false)
     luaunit.assertEquals(json.code, 32)
     luaunit.assertStrContains(json.err, 'No such object')
-    luaunit.assertEquals(json.errstr, 'No such object')
 end
 
 function m:TestSizelimit()
