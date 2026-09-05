@@ -958,9 +958,10 @@ static int lualdap_init(lua_State *L)
 	 *  this holds the LDAP * and the file descriptor.
 	 *
 	 *  Zero the storage: lua_newuserdata returns uninitialised memory,
-	 *  and we rely on conn->proxy_authz_id / conn->proxy_authz_ctrl etc.
-	 *  starting NULL for the cache logic in proxy_control_add and the
-	 *  cleanup in lualdap_close.
+	 *  and we rely on conn->proxy_authz_id / conn->proxy_authz_ctrl /
+	 *  conn->noop_ctrl starting NULL for the cache logic in
+	 *  proxy_control_add and noop_control_get and the cleanup in
+	 *  lualdap_close.
 	 *
 	 *  This is pushed onto the Lua stack.
 	 */
@@ -1576,6 +1577,11 @@ conn_state_free(conn_data *c)
 	free(c->proxy_authz_id);
 	c->proxy_authz_id = NULL;
 	c->proxy_authz_id_len = 0;
+
+	if (c->noop_ctrl) {
+		ldap_control_free(c->noop_ctrl);
+		c->noop_ctrl = NULL;
+	}
 }
 
 static void

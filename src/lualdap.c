@@ -84,6 +84,7 @@ typedef struct {
 	char					*proxy_authz_id;     //!< Cached proxy authz identity bytes (heap-owned). May contain embedded NULs.
 	size_t					 proxy_authz_id_len; //!< Length of proxy_authz_id, for binary-safe comparison.
 	LDAPControl				*proxy_authz_ctrl;   //!< Prebuilt Proxy Authorisation Control; valid iff proxy_authz_id != NULL.
+	LDAPControl				*noop_ctrl;          //!< Prebuilt No-Op Control, built on first use and reused for the life of the connection.
 } conn_data;
 
 typedef enum {
@@ -215,6 +216,82 @@ table_field_to_berval(lua_State *L, int table_pos, const char *field, struct ber
 	bv->bv_val = (char *)lua_tolstring(L, -1, &bv->bv_len);
 	lua_pop(L, 1);
 	return bv;
+}
+
+/*
+ * OpenLDAP No-Op Control object identifier (OID), LDAP_CONTROL_NOOP in
+ * include/ldap.h.
+ *
+ * slapd runs the operation through every check, then aborts the transaction
+ * instead of committing and answers LDAP_X_NO_OPERATION (0x410e). The
+ * control has no value.
+ */
+#define NOOP_OID "1.3.6.1.4.1.4203.666.5.2"
+
+/*
+ * Build or reuse the No-Op Control for conn.
+ *
+ * The control is critical, so a server that does not implement the control
+ * refuses the operation with unavailableCriticalExtension instead of
+ * committing the write. The control never changes, so one control per
+ * connection serves every operation. conn_state_free frees the control.
+ */
+static LDAPControl *
+noop_control_get(conn_data *conn)
+{
+	if (conn->noop_ctrl)
+		return conn->noop_ctrl;
+
+	if (ldap_control_create((char *)NOOP_OID, 1, NULL, 0, &conn->noop_ctrl) != LDAP_SUCCESS)
+		return NULL;
+
+	return conn->noop_ctrl;
+}
+
+/*
+ * Read table[field] as a boolean.
+ *
+ * table_field_to_bool returns 1 when the slot at table_pos is a table and
+ * table[field] is the boolean true. The function returns 0 otherwise.
+ */
+static int
+table_field_to_bool(lua_State *L, int table_pos, const char *field)
+{
+	int value;
+
+	if (!lua_istable(L, table_pos))
+		return 0;
+	lua_getfield(L, table_pos, field);
+	value = lua_isboolean(L, -1) && lua_toboolean(L, -1);
+	lua_pop(L, 1);
+	return value;
+}
+
+/*
+ * Fill ctrls with the server controls that the options table at opts_pos
+ * requests for a write operation, and terminate ctrls with NULL.
+ *
+ * The function reads two options: proxy_id (a string authzId) and noop (a
+ * boolean). ctrls must hold at least three slots, two controls and the
+ * NULL terminator. opts_pos of 0 means no options table.
+ */
+static void
+write_controls_build(lua_State *L, conn_data *conn, int opts_pos, LDAPControl **ctrls)
+{
+	struct berval proxy_id_bv;
+	LDAPControl *ctrl;
+	LDAPControl **ctrls_p = ctrls;
+
+	if (opts_pos) {
+		ctrl = proxy_control_add(conn, table_field_to_berval(L, opts_pos, "proxy_id", &proxy_id_bv));
+		if (ctrl) *ctrls_p++ = ctrl;
+
+		if (table_field_to_bool(L, opts_pos, "noop")) {
+			ctrl = noop_control_get(conn);
+			if (ctrl) *ctrls_p++ = ctrl;
+		}
+	}
+	*ctrls_p = NULL;
 }
 
 /*
@@ -688,7 +765,7 @@ static int lualdap_close(lua_State *L) {
 ** @param #2 Socket object
 ** @param #3 String with new entry's DN.
 ** @param #4 Table with new entry's attributes and values.
-** @param #5 Optional table with extra options: { proxy_id = "dn:..." }
+** @param #5 Optional table with extra options: { proxy_id = "dn:...", noop = true }
 ** @return Function to process the LDAP result.
 */
 static int lualdap_add(lua_State *L) {
@@ -697,10 +774,7 @@ static int lualdap_add(lua_State *L) {
 	attrs_data attrs;
 	ldap_int_t rc;
 	int msgid;
-	struct berval proxy_id_bv;
-	LDAPControl *proxy_ctrl;
-	LDAPControl *ctrls[2];
-	LDAPControl **ctrls_p = ctrls;
+	LDAPControl *ctrls[3];
 
 	update_socket(L, conn);
 
@@ -708,9 +782,7 @@ static int lualdap_add(lua_State *L) {
 	if (lua_istable (L, 4)) A_tab2mod(L, &attrs, 4, LUALDAP_MOD_ADD);
 	A_lastattr(L, &attrs);
 
-	proxy_ctrl = proxy_control_add(conn, table_field_to_berval(L, 5, "proxy_id", &proxy_id_bv));
-	if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
-	*ctrls_p = NULL;
+	write_controls_build(L, conn, 5, ctrls);
 
 	rc = ldap_add_ext(conn->ld, dn, attrs.attrs, ctrls, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return failcode(L, rc);
@@ -762,7 +834,7 @@ static int lualdap_compare (lua_State *L) {
 ** @param #1 LDAP connection.
 ** @param #2 Socket object
 ** @param #3 String with entry's DN.
-** @param #4 Optional table with extra options: { proxy_id = "dn:..." }
+** @param #4 Optional table with extra options: { proxy_id = "dn:...", noop = true }
 ** @return Boolean.
 */
 static int lualdap_delete (lua_State *L)
@@ -771,16 +843,11 @@ static int lualdap_delete (lua_State *L)
 	ldap_pchar_t	dn = (ldap_pchar_t) luaL_checkstring (L, 3);
 	ldap_int_t	rc;
 	int		msgid;
-	struct berval	proxy_id_bv;
-	LDAPControl	*proxy_ctrl;
-	LDAPControl	*ctrls[2];
-	LDAPControl	**ctrls_p = ctrls;
+	LDAPControl	*ctrls[3];
 
 	update_socket(L, conn);
 
-	proxy_ctrl = proxy_control_add(conn, table_field_to_berval(L, 4, "proxy_id", &proxy_id_bv));
-	if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
-	*ctrls_p = NULL;
+	write_controls_build(L, conn, 4, ctrls);
 
 	rc = ldap_delete_ext (conn->ld, dn, ctrls, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return failcode(L, rc);
@@ -816,7 +883,7 @@ static int op2code (const char *s) {
 ** @param #4, #5... Tables with modifications to apply.
 **   Each modification table must have [1] set to '+', '-', or '='.
 **   A trailing table without a valid operation code is treated as an options
-**   table and may contain: { proxy_id = "dn:..." }
+**   table and may contain: { proxy_id = "dn:...", noop = true }
 ** @return True on success or nil, error message otherwise.
 */
 static int lualdap_modify (lua_State *L) {
@@ -826,11 +893,8 @@ static int lualdap_modify (lua_State *L) {
 	ldap_int_t rc;
 	int msgid;
 	int param = 4;
-	struct berval proxy_id_bv;
-	struct berval *proxy_id = NULL;
-	LDAPControl *proxy_ctrl;
-	LDAPControl *ctrls[2];
-	LDAPControl **ctrls_p = ctrls;
+	int opts_pos = 0;
+	LDAPControl *ctrls[3];
 
 	update_socket(L, conn);
 
@@ -846,7 +910,7 @@ static int lualdap_modify (lua_State *L) {
 		lua_pop(L, 1);
 
 		if (op == LUALDAP_NO_OP) {
-			proxy_id = table_field_to_berval(L, param, "proxy_id", &proxy_id_bv);
+			opts_pos = param;
 			break;
 		}
 		A_tab2mod (L, &attrs, param, op);
@@ -854,9 +918,7 @@ static int lualdap_modify (lua_State *L) {
 	}
 	A_lastattr(L, &attrs);
 
-	proxy_ctrl = proxy_control_add(conn, proxy_id);
-	if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
-	*ctrls_p = NULL;
+	write_controls_build(L, conn, opts_pos, ctrls);
 
 	rc = ldap_modify_ext (conn->ld, dn, attrs.attrs, ctrls, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return failcode(L, rc);
@@ -874,7 +936,7 @@ static int lualdap_modify (lua_State *L) {
 ** @param #4 String with new RDN.
 ** @param #5 Optional new parent DN (nil to keep in place).
 ** @param #6 Boolean: delete old RDN values (default 0).
-** @param #7 Optional table with extra options: { proxy_id = "dn:..." }
+** @param #7 Optional table with extra options: { proxy_id = "dn:...", noop = true }
 */
 static int lualdap_rename (lua_State *L) {
 	conn_data	*conn = getconnection (L);
@@ -884,10 +946,7 @@ static int lualdap_rename (lua_State *L) {
 	int		del;
 	int		msgid;
 	ldap_int_t	rc;
-	struct berval	proxy_id_bv;
-	LDAPControl	*proxy_ctrl;
-	LDAPControl	*ctrls[2];
-	LDAPControl	**ctrls_p = ctrls;
+	LDAPControl	*ctrls[3];
 
 	update_socket(L, conn);
 
@@ -896,9 +955,7 @@ static int lualdap_rename (lua_State *L) {
 	par = (ldap_pchar_t) luaL_optlstring(L, 5, NULL, NULL);
 	del = luaL_optnumber(L, 6, 0);
 
-	proxy_ctrl = proxy_control_add(conn, table_field_to_berval(L, 7, "proxy_id", &proxy_id_bv));
-	if (proxy_ctrl) *ctrls_p++ = proxy_ctrl;
-	*ctrls_p = NULL;
+	write_controls_build(L, conn, 7, ctrls);
 
 	rc = ldap_rename(conn->ld, dn, rdn, par, del, ctrls, NULL, &msgid);
 	if (rc != LDAP_SUCCESS) return failcode(L, rc);
@@ -1766,6 +1823,7 @@ static void set_info (lua_State *L) {
 	lua_pushliteral(L, "LuaLDAP 1.1.1");
 	lua_settable(L, -3);
 }
+
 
 
 /** Main symbol exported by lualdap
