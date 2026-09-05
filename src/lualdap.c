@@ -1825,6 +1825,96 @@ static void set_info (lua_State *L) {
 }
 
 
+/*
+ * LDAP result codes that the module exports to Lua.
+ *
+ * Each entry pairs the libldap macro with the identifier that RFC 4511
+ * Appendix A assigns to the code. Lua code then copies neither the numbers
+ * nor the names. LDAP_X_NO_OPERATION is the OpenLDAP result of a write under
+ * the No-Op control. The code has no RFC 4511 identifier, so the entry uses
+ * the name noOperation.
+ */
+#define LUALDAP_RCODES(X) \
+	X(LDAP_SUCCESS, "success") \
+	X(LDAP_OPERATIONS_ERROR, "operationsError") \
+	X(LDAP_PROTOCOL_ERROR, "protocolError") \
+	X(LDAP_TIMELIMIT_EXCEEDED, "timeLimitExceeded") \
+	X(LDAP_SIZELIMIT_EXCEEDED, "sizeLimitExceeded") \
+	X(LDAP_COMPARE_FALSE, "compareFalse") \
+	X(LDAP_COMPARE_TRUE, "compareTrue") \
+	X(LDAP_AUTH_METHOD_NOT_SUPPORTED, "authMethodNotSupported") \
+	X(LDAP_STRONG_AUTH_REQUIRED, "strongerAuthRequired") \
+	X(LDAP_REFERRAL, "referral") \
+	X(LDAP_ADMINLIMIT_EXCEEDED, "adminLimitExceeded") \
+	X(LDAP_UNAVAILABLE_CRITICAL_EXTENSION, "unavailableCriticalExtension") \
+	X(LDAP_CONFIDENTIALITY_REQUIRED, "confidentialityRequired") \
+	X(LDAP_SASL_BIND_IN_PROGRESS, "saslBindInProgress") \
+	X(LDAP_NO_SUCH_ATTRIBUTE, "noSuchAttribute") \
+	X(LDAP_UNDEFINED_TYPE, "undefinedAttributeType") \
+	X(LDAP_INAPPROPRIATE_MATCHING, "inappropriateMatching") \
+	X(LDAP_CONSTRAINT_VIOLATION, "constraintViolation") \
+	X(LDAP_TYPE_OR_VALUE_EXISTS, "attributeOrValueExists") \
+	X(LDAP_INVALID_SYNTAX, "invalidAttributeSyntax") \
+	X(LDAP_NO_SUCH_OBJECT, "noSuchObject") \
+	X(LDAP_ALIAS_PROBLEM, "aliasProblem") \
+	X(LDAP_INVALID_DN_SYNTAX, "invalidDNSyntax") \
+	X(LDAP_ALIAS_DEREF_PROBLEM, "aliasDereferencingProblem") \
+	X(LDAP_INAPPROPRIATE_AUTH, "inappropriateAuthentication") \
+	X(LDAP_INVALID_CREDENTIALS, "invalidCredentials") \
+	X(LDAP_INSUFFICIENT_ACCESS, "insufficientAccessRights") \
+	X(LDAP_BUSY, "busy") \
+	X(LDAP_UNAVAILABLE, "unavailable") \
+	X(LDAP_UNWILLING_TO_PERFORM, "unwillingToPerform") \
+	X(LDAP_LOOP_DETECT, "loopDetect") \
+	X(LDAP_NAMING_VIOLATION, "namingViolation") \
+	X(LDAP_OBJECT_CLASS_VIOLATION, "objectClassViolation") \
+	X(LDAP_NOT_ALLOWED_ON_NONLEAF, "notAllowedOnNonLeaf") \
+	X(LDAP_NOT_ALLOWED_ON_RDN, "notAllowedOnRDN") \
+	X(LDAP_ALREADY_EXISTS, "entryAlreadyExists") \
+	X(LDAP_NO_OBJECT_CLASS_MODS, "objectClassModsProhibited") \
+	X(LDAP_AFFECTS_MULTIPLE_DSAS, "affectsMultipleDSAs") \
+	X(LDAP_OTHER, "other") \
+	X(LDAP_CANCELLED, "canceled") \
+	X(LDAP_NO_SUCH_OPERATION, "noSuchOperation") \
+	X(LDAP_TOO_LATE, "tooLate") \
+	X(LDAP_CANNOT_CANCEL, "cannotCancel") \
+	X(LDAP_ASSERTION_FAILED, "assertionFailed") \
+	X(LDAP_PROXIED_AUTHORIZATION_DENIED, "authorizationDenied") \
+	X(LDAP_X_NO_OPERATION, "noOperation")
+
+/** Adds the result code tables to the module table at the top of the stack
+ *
+ * rcode.by_name maps the libldap macro name without the LDAP_ prefix to
+ * the code, so Lua reads lualdap.rcode.by_name.NO_SUCH_OBJECT and gets 32.
+ * rcode.by_number maps the code to the RFC 4511 identifier, so Lua reads
+ * lualdap.rcode.by_number[32] and gets "noSuchObject".
+ */
+static void rcodes_push (lua_State *L) {
+	lua_pushliteral(L, "rcode");
+	lua_newtable(L);
+
+#define X(macro, name) \
+	lua_pushinteger(L, macro); \
+	lua_setfield(L, -2, #macro + 5);
+
+	lua_pushliteral(L, "by_name");
+	lua_newtable(L);
+	LUALDAP_RCODES(X)
+	lua_settable(L, -3);
+#undef X
+
+#define X(macro, name) \
+	lua_pushliteral(L, name); \
+	lua_rawseti(L, -2, macro);
+
+	lua_pushliteral(L, "by_number");
+	lua_newtable(L);
+	LUALDAP_RCODES(X)
+	lua_settable(L, -3);
+#undef X
+
+	lua_settable(L, -3);
+}
 
 /** Main symbol exported by lualdap
  *
@@ -1847,6 +1937,7 @@ int luaopen_ngx_lualdap (lua_State *L) {
 	luaL_setfuncs(L, lualdap, 0);
 
 	set_info(L);
+	rcodes_push(L);
 
 	return 1;
 }
