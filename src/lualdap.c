@@ -223,7 +223,7 @@ table_field_to_berval(lua_State *L, int table_pos, const char *field, struct ber
  * include/ldap.h.
  *
  * slapd runs the operation through every check, then aborts the transaction
- * instead of committing and answers LDAP_X_NO_OPERATION (0x410e). The
+ * and returns LDAP_X_NO_OPERATION (0x410e). The
  * control has no value.
  */
 #define NOOP_OID "1.3.6.1.4.1.4203.666.5.2"

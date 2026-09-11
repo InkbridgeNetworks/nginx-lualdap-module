@@ -5,11 +5,11 @@ The tests:
   1. Bind as cn=manager,dc=example,dc=org (rootdn).
   2. Send each write operation (add, modify, delete, and rename) with
      noop=1.
-  3. Assert that slapd answers LDAP_X_NO_OPERATION (0x410e, 16654) and
+  3. Assert that slapd returns LDAP_X_NO_OPERATION (0x410e, 16654) and
      that the directory is unchanged afterwards.
   4. Combine noop with proxy_id for a distinguished name (DN) that the
      container access control list (ACL) grants read only.
-  5. Assert that slapd answers insufficientAccessRights (50), so a probe
+  5. Assert that slapd returns insufficientAccessRights (50), so a probe
      reports the access decision of the proxied identity.
 --]]
 
