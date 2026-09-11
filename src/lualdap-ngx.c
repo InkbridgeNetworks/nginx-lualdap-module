@@ -39,6 +39,7 @@ static int ngx_http_lua_socket_read_error_retval_handler(ngx_http_request_t *r, 
  */
 static int faildirect (lua_State *L, const char *errmsg);
 static int failcode (lua_State *L, int rc);
+static int result_error_push (lua_State *L, const char *msg, int err);
 static search_data_t *getsearch (lua_State *L);
 static void lualdap_setmeta (lua_State *L, const char *name);
 static void set_attribs (lua_State *L, LDAP *ld, LDAPMessage *entry, int tab);
@@ -364,18 +365,7 @@ ldap_operation_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket
 		lua_pushboolean (L, 0);
 		break;
 	default:
-		lua_pushnil (L);
-		int nb_strings = 2;
-		lua_pushliteral (L, LUALDAP_PREFIX);
-		if (msg) {
-			lua_pushstring (L, msg);
-			lua_pushliteral (L, " ");
-			nb_strings = 4;
-		}
-		lua_pushstring (L, ldap_err2string(err));
-		lua_concat (L, nb_strings);
-		lua_pushnumber (L, err);
-		ret = 3;
+		ret = result_error_push (L, msg, err);
 	}
 	ldap_memfree(mdn);
 	ldap_memfree(msg);
@@ -552,21 +542,10 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 		 * that marks the end of the entries.
 		 */
 		if (rc != LDAP_SUCCESS) {
-			int nb_strings = 2;
-
 			if (returnedControls) ldap_controls_free(returnedControls);
 			search_close (L, search);
 
-			lua_pushnil (L);
-			lua_pushliteral (L, LUALDAP_PREFIX);
-			if (msg && *msg) {
-				lua_pushstring (L, msg);
-				lua_pushliteral (L, " ");
-				nb_strings = 4;
-			}
-			lua_pushstring (L, ldap_err2string(rc));
-			lua_concat (L, nb_strings);
-			lua_pushnumber (L, rc);
+			result_error_push (L, msg, rc);
 			ldap_memfree(msg);
 
 			ldap_msgfree(op_ctx->res);

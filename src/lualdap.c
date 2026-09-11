@@ -304,6 +304,25 @@ static int faildirect (lua_State *L, const char *errmsg) {
 }
 
 
+/** Push nil, the error text of an LDAP result, and the result code
+ *
+ * The text is the diagnostic message that the server sent with the result
+ * when the server sent one, otherwise the libldap description of the code.
+ * The caller frees msg. Lua receives (nil, text, code) and reads the name of
+ * the code from lualdap.rcode.by_number, so the text carries nothing that
+ * the code already says.
+ */
+static int result_error_push (lua_State *L, const char *msg, int err) {
+	lua_pushnil (L);
+	if (msg && *msg) {
+		lua_pushstring (L, msg);
+	} else {
+		lua_pushstring (L, ldap_err2string (err));
+	}
+	lua_pushnumber (L, err);
+	return 3;
+}
+
 /** Push nil, the `ldap_err2string` message for `rc`, and `rc` itself
  *
  * A caller returns the count that failcode returns, so Lua receives
