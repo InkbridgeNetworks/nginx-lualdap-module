@@ -254,12 +254,65 @@ push_sync_meta(lua_State *L, LDAP *ld, LDAPMessage *entry, search_data_t *search
 }
 
 /*
+ * Return the next pending syncIdSet entry to Lua as
+ * ("uuidDelete", nil, nil, { state = "delete", entryUUID, syncCookie }).
+ *
+ * A syncIdSet (RFC 4533 section 2.5) names entries by entryUUID alone. The
+ * binding keeps a set only when refreshDeletes is TRUE: the entries were
+ * deleted since the cookie that the client resumed from, so no DN exists to
+ * return. The tuple keeps the positions of an "entry" tuple so that Lua reads
+ * the metadata from the same slot. idset_push_next frees the set after
+ * returning the last entry.
+ *
+ * The caller guarantees that search->idset is non-NULL.
+ */
+static int
+idset_push_next(lua_State *L, search_data_t *search)
+{
+	struct berval *uuid_bv = search->idset[search->idset_next];
+	char           uuid_str[37];
+
+	lua_pushliteral(L, "uuidDelete");
+	lua_pushnil(L);
+	lua_pushnil(L);
+	lua_newtable(L);
+	lua_pushstring(L, "state");
+	lua_pushstring(L, sync_state_name(LDAP_SYNC_DELETE));
+	lua_rawset(L, -3);
+	if (uuid_bv->bv_len == 16) {
+		format_uuid((unsigned char *)uuid_bv->bv_val, uuid_str);
+		lua_pushstring(L, "entryUUID");
+		lua_pushstring(L, uuid_str);
+		lua_rawset(L, -3);
+	}
+	if (search->latest_cookie) {
+		lua_pushstring(L, "syncCookie");
+		lua_pushlstring(L, search->latest_cookie->bv_val, search->latest_cookie->bv_len);
+		lua_rawset(L, -3);
+	}
+
+	search->idset_next++;
+	if (search->idset[search->idset_next] == NULL) {
+		ber_bvecfree(search->idset);
+		search->idset = NULL;
+		search->idset_next = 0;
+	}
+
+	return 4;
+}
+
+/*
  * Parse an RFC 4533 syncInfoValue (the value of an LDAP_RES_INTERMEDIATE
  * with OID LDAP_SYNC_INFO).
  *
  * Side effects:
  *   - Updates search->latest_cookie if a cookie is present in the
  *     newcookie / refreshDelete / refreshPresent / syncIdSet CHOICE.
+ *   - Stores the entryUUIDs of a syncIdSet with refreshDeletes TRUE in
+ *     search->idset. The iterator returns one entryUUID per call. A set
+ *     with refreshDeletes FALSE names the entries that are present and
+ *     unchanged, which the caller learns nothing from, so the binding
+ *     frees that set unread.
  *
  * Returns 1 if the message signalled refresh-done (refreshDelete or
  * refreshPresent with refreshDone=TRUE), 0 otherwise. refreshDone is
@@ -280,25 +333,27 @@ update_cookie_from_sync_info(search_data_t *search, struct berval *infoval)
 	ber_len_t      len;
 	struct berval  cookie_bv = {0, NULL};
 	ber_int_t      refresh_done = 0;
-	int            top_choice;
 
 	if (!infoval || !infoval->bv_val) return 0;
 
 	ber = ber_init(infoval);
 	if (!ber) return 0;
 
+	/*
+	 * The top tag is the syncInfoValue CHOICE (RFC 4533 section 2.5), which
+	 * ldap.h names LDAP_TAG_SYNC_*.
+	 */
 	top_tag = ber_peek_tag(ber, &len);
-	top_choice = top_tag & 0x1f;  /* tag number, ignoring class+constructed bits */
-	switch (top_choice) {
-	case 0:  /* newcookie [0]: the value IS the cookie OCTET STRING */
+	switch (top_tag) {
+	case LDAP_TAG_SYNC_NEW_COOKIE:  /* newcookie [0]: the value IS the cookie OCTET STRING */
 		if (ber_scanf(ber, "o", &cookie_bv) != LBER_ERROR) {
 			store_latest_cookie(search, &cookie_bv);
 			if (cookie_bv.bv_val) ber_memfree(cookie_bv.bv_val);
 		}
 		break;
-	case 1:  /* refreshDelete  [1] SEQUENCE { cookie? syncCookie, refreshDone? BOOL DEFAULT TRUE } */
-	case 2:  /* refreshPresent [2] SEQUENCE { cookie? syncCookie, refreshDone? BOOL DEFAULT TRUE } */
-	case 3:  /* syncIdSet      [3] SEQUENCE { cookie? syncCookie, refreshDeletes? BOOL, syncUUIDs SET } */
+	case LDAP_TAG_SYNC_REFRESH_DELETE:   /* refreshDelete  [1] SEQUENCE { cookie? syncCookie, refreshDone? BOOL DEFAULT TRUE } */
+	case LDAP_TAG_SYNC_REFRESH_PRESENT:  /* refreshPresent [2] SEQUENCE { cookie? syncCookie, refreshDone? BOOL DEFAULT TRUE } */
+	case LDAP_TAG_SYNC_ID_SET:           /* syncIdSet      [3] SEQUENCE { cookie? syncCookie, refreshDeletes? BOOL, syncUUIDs SET } */
 		if (ber_scanf(ber, "{" /*}*/) == LBER_ERROR) break;
 		peek_tag = ber_peek_tag(ber, &len);
 		if (peek_tag == LBER_OCTETSTRING) {
@@ -314,12 +369,47 @@ update_cookie_from_sync_info(search_data_t *search, struct berval *infoval)
 		 * the BOOL is absent from the wire. syncIdSet doesn't have this
 		 * field, so we don't read it there.
 		 */
-		if (top_choice == 1 || top_choice == 2) {
+		if (top_tag == LDAP_TAG_SYNC_REFRESH_DELETE || top_tag == LDAP_TAG_SYNC_REFRESH_PRESENT) {
 			if (peek_tag == LBER_BOOLEAN) {
 				if (ber_scanf(ber, "b", &refresh_done) == LBER_ERROR)
 					refresh_done = 1;
 			} else {
 				refresh_done = 1;  /* DEFAULT TRUE */
+			}
+		}
+		/*
+		 * A refreshPresent message means that the server ran the present
+		 * phase. The server could not enumerate the entries deleted since
+		 * the cookie that the client resumed from, so the caller cannot
+		 * learn of the deletions from the search.
+		 */
+		if (top_tag == LDAP_TAG_SYNC_REFRESH_PRESENT) search->refresh_present = 1;
+		/*
+		 * syncIdSet carries an optional refreshDeletes BOOL with a DEFAULT
+		 * of FALSE, then the SET OF entryUUID. slapd uses the set with
+		 * refreshDeletes TRUE to report the entries deleted since the
+		 * cookie that a client resumed from, so a parser that drops the
+		 * set loses the deletions. A set with refreshDeletes FALSE names
+		 * the present entries, which the caller does not need, so the
+		 * binding leaves that set undecoded.
+		 */
+		if (top_tag == LDAP_TAG_SYNC_ID_SET) {
+			ber_int_t       refresh_deletes = 0;
+			struct berval **uuids = NULL;
+
+			if (peek_tag == LBER_BOOLEAN) {
+				if (ber_scanf(ber, "b", &refresh_deletes) == LBER_ERROR)
+					refresh_deletes = 0;
+				peek_tag = ber_peek_tag(ber, &len);
+			}
+			if (refresh_deletes && peek_tag == LBER_SET
+			    && ber_scanf(ber, "[V]", &uuids) != LBER_ERROR
+			    && uuids && uuids[0]) {
+				if (search->idset) ber_bvecfree(search->idset);
+				search->idset = uuids;
+				search->idset_next = 0;
+			} else if (uuids) {
+				ber_bvecfree(uuids);
 			}
 		}
 		break;
@@ -596,6 +686,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			 * keeps the legacy (dn, attribs) shape.
 			 *
 			 * persistent:     ("entry", dn, attribs, meta?)
+			 *                 ("uuidDelete", nil, nil, meta) for a syncIdSet member, see idset_push_next
 			 * non-persistent: (dn, attribs)
 			 */
 			if (search->type == SEARCH_TYPE_PERSISTENT) {
@@ -663,24 +754,47 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			ldap_msgfree(op_ctx->res);
 			op_ctx->res = NULL;
 
-			if (refresh_done && search->type == SEARCH_TYPE_PERSISTENT) {
-				ngx_free(op_ctx);
+			if (search->type == SEARCH_TYPE_PERSISTENT) {
 				/*
-				 * ("streamBegins", { syncCookie = ... })
+				 * A syncIdSet named entries that the caller must receive.
+				 * ldap_search_receive_retval_handler returns the first entry
+				 * now. next_message returns the remaining entries before
+				 * reading another message.
+				 */
+				if (search->idset) {
+					ngx_free(op_ctx);
+					return idset_push_next(L, search);
+				}
+
+				/*
+				 * ("streamBegins", nil, nil, { syncCookie = ..., refreshPresent = true? })
 				 *
 				 * Tag first so callers can pattern-match the iterator's
-				 * message kind. End-of-search returns no values (= nil in
+				 * message type. End-of-search returns no values (= nil in
 				 * Lua), so iter() naturally terminates a plain while loop
-				 * without colliding with this marker.
+				 * without colliding with this marker. The metadata table
+				 * sits in the same position as the metadata of an "entry"
+				 * tuple, so a caller reads every yield the same way. The
+				 * table carries refreshPresent = true when the server ran
+				 * the present phase. See search_data_t.refresh_present.
 				 */
-				lua_pushliteral(L, "streamBegins");
-				lua_newtable(L);
-				if (search->latest_cookie && search->latest_cookie->bv_val) {
-					lua_pushlstring(L, search->latest_cookie->bv_val,
-							 search->latest_cookie->bv_len);
-					lua_setfield(L, -2, "syncCookie");
+				if (refresh_done) {
+					ngx_free(op_ctx);
+					lua_pushliteral(L, "streamBegins");
+					lua_pushnil(L);
+					lua_pushnil(L);
+					lua_newtable(L);
+					if (search->latest_cookie && search->latest_cookie->bv_val) {
+						lua_pushlstring(L, search->latest_cookie->bv_val,
+								 search->latest_cookie->bv_len);
+						lua_setfield(L, -2, "syncCookie");
+					}
+					if (search->refresh_present) {
+						lua_pushboolean(L, 1);
+						lua_setfield(L, -2, "refreshPresent");
+					}
+					return 4;
 				}
-				return 2;
 			}
 
 			conn->conn.connection->read->handler = ldap_socket_handler;

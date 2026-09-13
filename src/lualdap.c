@@ -106,6 +106,18 @@ typedef struct {
 	struct berval	*latest_cookie;		//!< Most recent syncCookie seen on this persistent search;
 						//!< updated from per-entry Sync State Control and from
 						//!< intermediate syncInfoMessages, freed in search_close.
+	struct berval	**idset;		//!< entryUUIDs of deleted entries, from a syncIdSet message
+						//!< (RFC 4533 section 2.5) with refreshDeletes TRUE, that the
+						//!< iterator has not yet returned to Lua. The iterator returns
+						//!< one entryUUID per call before reading the next message.
+						//!< NULL when no entryUUID is pending. search_close frees the
+						//!< set.
+	int		idset_next;		//!< Index in idset of the next entryUUID to return.
+	int		refresh_present;	//!< The server sent a refreshPresent message (RFC 4533 section
+						//!< 3.3.2). The refresh phase enumerated the present entries and
+						//!< not the entries deleted since the cookie that the client
+						//!< resumed from. The streamBegins marker reports the flag as
+						//!< refreshPresent.
 	ngx_pool_cleanup_t *pool_cleanup;	//!< Per-request cleanup hook that abandons the search
 						//!< when the request pool is destroyed (covers abrupt
 						//!< client disconnect / handler kill / lua error /
@@ -1100,6 +1112,10 @@ static void search_close(lua_State *L, search_data_t *search)
 		ber_bvfree(search->latest_cookie);
 		search->latest_cookie = NULL;
 	}
+	if (search->idset != NULL) {
+		ber_bvecfree(search->idset);
+		search->idset = NULL;
+	}
 
 	/*
 	 * Disarm the per-request pool cleanup. Setting handler to NULL is
@@ -1181,6 +1197,13 @@ static int next_message(lua_State *L) {
 		return luaL_error(L, "no request found");
 	}
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "entering iterator aka next_message");
+
+	/*
+	 * A syncIdSet message names several entries at once. The iterator
+	 * returns the entries one per call, so next_message returns every
+	 * pending entry before reading another message from the server.
+	 */
+	if (search->idset) return idset_push_next(L, search);
 
 	lua_rawgeti (L, LUA_REGISTRYINDEX, search->conn);
 	conn = (conn_data *)lua_touserdata(L, -1); /* get connection */
@@ -1329,6 +1352,9 @@ static search_data_t *create_search(lua_State *L, int conn_index, int msgid, str
 	search->type = type;
 	search->morePages = FALSE;
 	search->latest_cookie = NULL;
+	search->idset = NULL;
+	search->idset_next = 0;
+	search->refresh_present = 0;
 	search->pool_cleanup = NULL;
 
 	conn = (conn_data *)lua_touserdata(L, conn_index);
