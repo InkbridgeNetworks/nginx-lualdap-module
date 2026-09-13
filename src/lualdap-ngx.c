@@ -42,7 +42,7 @@ static int failcode (lua_State *L, int rc);
 static int result_error_push (lua_State *L, const char *msg, int err);
 static search_data_t *getsearch (lua_State *L);
 static void lualdap_setmeta (lua_State *L, const char *name);
-static void set_attribs (lua_State *L, LDAP *ld, LDAPMessage *entry, int tab);
+static void push_entry (lua_State *L, LDAP *ld, LDAPMessage *entry);
 static void push_dn (lua_State *L, LDAP *ld, LDAPMessage *entry);
 static void search_close (lua_State *L, search_data_t *search);
 
@@ -369,7 +369,7 @@ update_cookie_from_sync_info(search_data_t *search, struct berval *infoval)
 		 * the BOOL is absent from the wire. syncIdSet doesn't have this
 		 * field, so we don't read it there.
 		 */
-		if (top_tag == LDAP_TAG_SYNC_REFRESH_DELETE || top_tag == LDAP_TAG_SYNC_REFRESH_PRESENT) {
+		if ((top_tag == LDAP_TAG_SYNC_REFRESH_DELETE) || (top_tag == LDAP_TAG_SYNC_REFRESH_PRESENT)) {
 			if (peek_tag == LBER_BOOLEAN) {
 				if (ber_scanf(ber, "b", &refresh_done) == LBER_ERROR)
 					refresh_done = 1;
@@ -402,8 +402,8 @@ update_cookie_from_sync_info(search_data_t *search, struct berval *infoval)
 					refresh_deletes = 0;
 				peek_tag = ber_peek_tag(ber, &len);
 			}
-			if (refresh_deletes && peek_tag == LBER_SET
-			    && ber_scanf(ber, "[V]", &uuids) != LBER_ERROR
+			if (refresh_deletes && (peek_tag == LBER_SET)
+			    && (ber_scanf(ber, "[V]", &uuids) != LBER_ERROR)
 			    && uuids && uuids[0]) {
 				if (search->idset) ber_bvecfree(search->idset);
 				search->idset = uuids;
@@ -691,10 +691,8 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 			 */
 			if (search->type == SEARCH_TYPE_PERSISTENT) {
 				lua_pushliteral(L, "entry");
-				push_dn(L, conn->ld, entry);
-				lua_newtable(L);
+				push_entry(L, conn->ld, entry);
 				attrs_idx = lua_gettop(L);
-				set_attribs(L, conn->ld, entry, attrs_idx);
 				ret = 3;
 				if (push_sync_meta(L, conn->ld, entry, search)) {
 					ret = 4;
@@ -702,10 +700,7 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 					lua_setfield(L, attrs_idx, "entryUUID");
 				}
 			} else {
-				push_dn(L, conn->ld, entry);
-				lua_newtable(L);
-				attrs_idx = lua_gettop(L);
-				set_attribs(L, conn->ld, entry, attrs_idx);
+				push_entry(L, conn->ld, entry);
 				ret = 2;
 			}
 			break;

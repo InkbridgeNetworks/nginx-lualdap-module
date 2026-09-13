@@ -997,51 +997,82 @@ static int lualdap_rename (lua_State *L) {
 
 
 /*
-** Push an attribute value (or a table of values) on top of the stack.
-** @param L lua_State.
-** @param ld LDAP Connection.
-** @param entry Current entry.
-** @param attr Name of entry's attribute to get values from.
-** @return 1 in case of success.
-*/
-static int push_values (lua_State *L, LDAP *ld, LDAPMessage *entry, char *attr) {
-	int i, n;
-	BerValue **vals = ldap_get_values_len (ld, entry, attr);
-	n = ldap_count_values_len (vals);
-	if (n == 0) /* no values */
-		lua_pushboolean (L, 1);
-	else if (n == 1) /* just one value */
-		lua_pushlstring (L, vals[0]->bv_val, vals[0]->bv_len);
-	else { /* Multiple values */
-		lua_newtable (L);
-		for (i = 0; i < n; i++) {
-			lua_pushlstring (L, vals[i]->bv_val, vals[i]->bv_len);
-			lua_rawseti (L, -2, i+1);
-		}
-	}
-	ldap_value_free_len (vals);
-	return 1;
-}
-
+ * libldap exports ldap_get_message_ber and declares it in ldap_pvt.h, which
+ * the Debian packages do not install. The function returns the BerElement of
+ * a message, positioned at the start of the message body.
+ */
+extern BerElement *ldap_get_message_ber(LDAPMessage *msg);
 
 /*
-** Store entry's attributes and values at the given table.
-** @param entry Current entry.
-** @param tab Absolute stack index of the table.
-*/
-static void set_attribs (lua_State *L, LDAP *ld, LDAPMessage *entry, int tab) {
-	char *attr;
-	BerElement *ber = NULL;
-	for (attr = ldap_first_attribute (ld, entry, &ber);
-		attr != NULL;
-		attr = ldap_next_attribute (ld, entry, ber))
-	{
-		lua_pushstring (L, attr);
-		push_values (L, ld, entry, attr);
-		lua_rawset (L, tab); /* tab[attr] = vals */
-		ldap_memfree (attr);
+ * Push the DN of an entry, then a table of the entry's attributes.
+ *
+ * The walk reads the SearchResultEntry with the liblber iteration calls and
+ * ber_get_stringbv with LBER_BV_NOTERM, so the DN, each attribute name, and
+ * each value are pointers into the message buffer and libldap copies nothing
+ * and writes nothing. The one copy is lua_pushlstring into the Lua heap.
+ *
+ * The in-place formats of ber_scanf ("m", "M") and the libldap functions built
+ * on them (ldap_get_attribute_ber) are not usable here: they NUL-terminate
+ * each string by overwriting the byte after it, and the byte after the last
+ * value is the tag of the entry controls, which push_sync_meta still has to
+ * read. ldap_get_values_len copies every value out of the message instead,
+ * which is what this function replaces.
+ *
+ * An attribute with no values is stored as true, one value as a string, and
+ * several values as an array, the shape that every Lua caller expects.
+ * Leaves two values on the stack: the DN, or nil when the entry does not
+ * decode, then the table.
+ */
+static void push_entry(lua_State *L, LDAP *ld, LDAPMessage *entry)
+{
+	BerElement    *ber = ber_dup(ldap_get_message_ber(entry));
+	struct berval  dn, name, val;
+	ber_len_t      len;
+	char          *attr_last, *val_last;
+	ber_tag_t      tag;
+	int            tab, n;
+
+	(void)ld;
+	if ((ber == NULL) || (ber_scanf(ber, "{" /*}*/) == LBER_ERROR)
+	    || (ber_get_stringbv(ber, &dn, LBER_BV_NOTERM) == LBER_DEFAULT)) {
+		lua_pushnil(L);
+		lua_newtable(L);
+		if (ber) ber_free(ber, 0);
+		return;
 	}
-	ber_free (ber, 0); /* don't need to test if (ber == NULL) */
+	lua_pushlstring(L, dn.bv_val, dn.bv_len);
+	lua_newtable(L);
+	tab = lua_gettop(L);
+
+	/* attributes: SEQUENCE OF SEQUENCE { type OCTET STRING, vals SET OF OCTET STRING } */
+	for (tag = ber_first_element(ber, &len, &attr_last); tag != LBER_DEFAULT;
+	     tag = ber_next_element(ber, &len, attr_last)) {
+		if (ber_scanf(ber, "{" /*}*/) == LBER_ERROR) break;
+		if (ber_get_stringbv(ber, &name, LBER_BV_NOTERM) == LBER_DEFAULT) break;
+		lua_pushlstring(L, name.bv_val, name.bv_len);
+
+		/*
+		 * The first value is pushed as a string. A second value turns the
+		 * string into the first element of an array, and later values are
+		 * appended, so a single-valued attribute never allocates a table.
+		 */
+		n = 0;
+		for (tag = ber_first_element(ber, &len, &val_last); tag != LBER_DEFAULT;
+		     tag = ber_next_element(ber, &len, val_last)) {
+			if (ber_get_stringbv(ber, &val, LBER_BV_NOTERM) == LBER_DEFAULT) break;
+			n++;
+			if (n == 2) {
+				lua_newtable(L);	/* name, v1, t */
+				lua_insert(L, -2);	/* name, t, v1 */
+				lua_rawseti(L, -2, 1);	/* name, t */
+			}
+			lua_pushlstring(L, val.bv_val, val.bv_len);
+			if (n >= 2) lua_rawseti(L, -2, n);
+		}
+		if (n == 0) lua_pushboolean(L, 1);
+		lua_rawset(L, tab);
+	}
+	ber_free(ber, 0);
 }
 
 /*
