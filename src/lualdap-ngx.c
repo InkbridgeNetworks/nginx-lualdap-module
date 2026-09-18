@@ -934,9 +934,45 @@ static ber_slen_t
 ngx_http_auth_ldap_sb_write(Sockbuf_IO_Desc *sbiod, void *buf, ber_len_t len)
 {
 	conn_data *c = (conn_data *)sbiod->sbiod_pvt;
+	ngx_connection_t *conn = c->conn.connection;
 	ber_slen_t ret;
 
-	ret = c->conn.connection->send(c->conn.connection, buf, len);
+	/*
+	 *  Two finalizers call this write callback to flush an UNBIND or ABANDON
+	 *  PDU during Lua garbage collection. The connection finalizer runs
+	 *  lualdap_close -> conn_state_free -> ldap_unbind_ext. The search
+	 *  finalizer runs search_close / the request pool cleanup -> ldap_abandon.
+	 *  Garbage collection runs after the request that owned the cosocket has
+	 *  ended and after nginx has closed the cosocket.
+	 *
+	 *  nginx keeps a pool of ngx_connection_t structures in a fixed array.
+	 *  When nginx releases a connection, nginx re-adds the connection to this
+	 *  pool rather than freeing the connection. If this callback does not
+	 *  recognise that nginx has closed the connection and cleared the
+	 *  associated c->ssl memory, the write can cause a SEGV.
+	 *
+	 *  init_fd and update_socket set connection->data to this conn_data, so
+	 *  connection->data points at this conn_data for the life of an operation.
+	 *  On release ngx_free_connection repoints connection->data at the pool
+	 *  free list. ngx_get_connection then zeroes the structure on reuse, so
+	 *  connection->data no longer equals this conn_data once the slot has left
+	 *  the module's ownership. Drop the PDU in that case. The UNBIND or ABANDON
+	 *  PDU is a best-effort notice to the server, and the socket nginx owned is
+	 *  gone.
+	 *
+	 *  Dropping the PDU is safe. UNBIND and ABANDON have no response (RFC
+	 *  4511), so libldap does not wait for a reply and the server does not need
+	 *  a reply. The module can drop the PDU only in this callback.
+	 *  ldap_unbind_ext and ldap_destroy both free the handle by writing through
+	 *  this callback. The module cannot remove the sockbuf provider to stop the
+	 *  write, because ber_int_sb_write asserts that a provider is present.
+	 *  libldap provides no way to free the handle without a write.
+	 */
+	if (conn->data != c) {
+		return len;
+	}
+
+	ret = conn->send(conn, buf, len);
 	if (ret < 0) {
 		errno = (ret == NGX_AGAIN) ? NGX_EAGAIN : NGX_ECONNRESET;
 		return 0;
