@@ -246,10 +246,11 @@ jobs:
           cat /tmp/nginx_status.out 2>/dev/null || true
 
       #
-      #  Run the stress suite. STRESS_TESTS=1 unblocks tests/stress.lua;
-      #  it's a no-op when unset. The 30-minute cap covers a 10K LDIF
-      #  inject (~30s) plus three torture loops at 50 iterations each
-      #  with some buffer.
+      #  Run the stress suite. STRESS_TESTS=1 enables tests/stress.lua and
+      #  tests/pooled_gc.lua. Both are a no-op when STRESS_TESTS is unset. The
+      #  30-minute cap covers a 10K LDIF inject, three abrupt-close torture
+      #  loops at 50 iterations each, and the pooled-connection finalizer loop
+      #  at 500 cycles, with headroom.
       #
       - name: Tests - Run stress suite
         timeout-minutes: 30
@@ -309,3 +310,29 @@ jobs:
             build/test/log/asan.log*
           if-no-files-found: warn
           retention-days: 14
+
+      #
+      #  Gate on the ASan log. halt_on_error=0 allows a run to finish after a
+      #  memory error. A use-after-free (the connection finalizer writing an
+      #  UNBIND PDU through a freed ngx_connection_t) is therefore recorded,
+      #  but nginx keeps serving and the Lua suite alone would stay green. Fail
+      #  the job when any ASan or LSAN report is present. This step runs after
+      #  the upload step, so the evidence is always retained.
+      #
+      - name: Tests - Fail on any ASan / LSAN report
+        run: |
+          ASAN_LOG="$PWD/build/test/log/asan.log"
+          found=0
+          for f in "$ASAN_LOG"*; do
+            [ -f "$f" ] || continue
+            if grep -qE "ERROR: (Address|Leak)Sanitizer|runtime error:|SUMMARY: (Address|Leak)Sanitizer" "$f"; then
+              echo "::error::sanitizer reported a problem in $(basename "$f")"
+              echo "==> $f <=="
+              sed -n '1,120p' "$f"
+              found=1
+            fi
+          done
+          if [ "$found" -ne 0 ]; then
+            exit 1
+          fi
+          echo "No ASan / LSAN errors reported."

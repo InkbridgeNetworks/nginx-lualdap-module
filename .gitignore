@@ -7,4 +7,7 @@
 build
 openresty
 openresty-*
-ci/nginx/conf.d/default.conf
+ci/nginx/conf.d/default.confci/nginx/modules
+ci/nginx/modules
+ci/nginx/logs/
+ci/nginx/stdout
