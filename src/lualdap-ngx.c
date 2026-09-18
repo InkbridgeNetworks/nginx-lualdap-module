@@ -443,8 +443,11 @@ ldap_operation_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket
 	}
 
 	rc = ldap_parse_result(conn->ld, op_ctx->res, &err, &mdn, &msg, NULL, NULL, 1);
-	if (rc != LDAP_SUCCESS)
+	if (rc != LDAP_SUCCESS) {
+		/* freeit=1 above already freed op_ctx->res. Free op_ctx too. */
+		ngx_free(op_ctx);
 		return failcode(L, rc);
+	}
 
 	switch (err) {
 	case LDAP_SUCCESS:
@@ -612,6 +615,16 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 	if (u->ft_type) {
 		n = ngx_http_lua_socket_read_error_retval_handler(r, u, L);
 		lua_pushliteral(L, "");
+		/*
+		 * A read error or timeout ends the search on this path. The
+		 * read-error handler has already cleared coctx->cleanup, so the
+		 * coroutine cleanup does not free op_ctx. Every other return
+		 * from this handler frees op_ctx. Free op_ctx on this path too,
+		 * the same as the operation handler frees op_ctx.
+		 * The abrupt-close torture test reaches this path once per
+		 * abandoned search.
+		 */
+		ngx_free(op_ctx);
 		return n + 1;
 	}
 
@@ -1373,8 +1386,10 @@ static int lualdap_init_fd(lua_State *L) {
 		default:
 			ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX "ldap next message read failed: %d", (int) u->ft_type);
 			rc = ngx_http_lua_socket_tcp_receive_retval_handler(r, u, L);
-				dd("tcp receive retval returned: %d", (int) rc);
-				return rc;
+			dd("tcp receive retval returned: %d", (int) rc);
+			/* op_ctx is not yet registered with the coroutine cleanup, so free op_ctx directly. */
+			ngx_free(op_ctx);
+			return rc;
 
 		case NGX_OK:
 			ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, LUALDAP_PREFIX "lua tcp socket receive done in a single run");
@@ -1665,6 +1680,7 @@ ldap_bind_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tcp_
 
 	if (ldap_conn->ld == NULL) {
 		ngx_http_auth_ldap_close_connection(ldap_conn, r->connection->log);
+		ngx_free(op_ctx);
 		return luaL_error(L, "ldap_bind_receive_retval_handler: no LDAP connection");
 	}
 
