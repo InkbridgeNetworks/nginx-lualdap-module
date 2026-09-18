@@ -921,11 +921,10 @@ ngx_http_auth_ldap_sb_read(Sockbuf_IO_Desc *sbiod, void *buf, ber_len_t len)
 	conn_data *c = (conn_data *)sbiod->sbiod_pvt;
 	ber_slen_t ret;
 
-
 	ret = c->conn.connection->recv(c->conn.connection, buf, len);
 	if (ret < 0) {
-	errno = (ret == NGX_AGAIN) ? NGX_EAGAIN : NGX_ECONNRESET;
-	return -1;
+		errno = (ret == NGX_AGAIN) ? NGX_EAGAIN : NGX_ECONNRESET;
+		return -1;
 	}
 
 	return ret;
@@ -937,11 +936,10 @@ ngx_http_auth_ldap_sb_write(Sockbuf_IO_Desc *sbiod, void *buf, ber_len_t len)
 	conn_data *c = (conn_data *)sbiod->sbiod_pvt;
 	ber_slen_t ret;
 
-
 	ret = c->conn.connection->send(c->conn.connection, buf, len);
 	if (ret < 0) {
-	errno = (ret == NGX_AGAIN) ? NGX_EAGAIN : NGX_ECONNRESET;
-	return 0;
+		errno = (ret == NGX_AGAIN) ? NGX_EAGAIN : NGX_ECONNRESET;
+		return 0;
 	}
 
 	return ret;
