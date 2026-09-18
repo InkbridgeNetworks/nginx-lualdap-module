@@ -1,8 +1,12 @@
 ngx_module_type=HTTP
 ngx_module_name=ngx_lualdap
 
-# ludldap.c includes lualdap-ngx.c
+# lualdap.c #includes lualdap-ngx.c, so name lualdap-ngx.c as a dependency.
+# Without it make only knows lualdap.o depends on lualdap.c, and an edit to
+# lualdap-ngx.c alone does not trigger a recompile, so the build links a stale
+# object. auto/module adds ngx_module_deps to the object's prerequisites.
 ngx_module_srcs="$ngx_addon_dir/src/lualdap.c"
+ngx_module_deps="$ngx_addon_dir/src/lualdap-ngx.c"
 
 # Unfortunately we need some internal headers to integrate with cosockets
 ngx_lua_dir=$(echo "$HTTP_LUA_DEPS" | grep -oE 'ngx_lua-[^/]+' | head -1)

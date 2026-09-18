@@ -88,7 +88,7 @@ jobs:
       #  non-ASan build cache from the main workflow.
       #
       - name: NGINX - Generate cache key hash
-        run: echo "CACHE_KEY=stress-$(echo "${{ runner.os }}-${{ env.openresty_version }}-${{ env.nginx_config_args }}" | sha256sum | cut -d ' ' -f1)" >> $GITHUB_ENV
+        run: echo "CACHE_KEY=stress-$(echo "${{ runner.os }}-${{ env.openresty_version }}-${{ env.nginx_config_args }}-${{ hashFiles('src/**', 'config') }}" | sha256sum | cut -d ' ' -f1)" >> $GITHUB_ENV
 
       - name: NGINX - Install basic dependencies
         run: |

@@ -76,7 +76,7 @@ jobs:
           fetch-depth: 100
 
       - name: NGINX - Generate cache key hash
-        run: echo "CACHE_KEY=$(echo "${{ runner.os }}-${{ env.openresty_version }}-${{ env.nginx_config_args }}" | sha256sum | cut -d ' ' -f1)" >> $GITHUB_ENV
+        run: echo "CACHE_KEY=$(echo "${{ runner.os }}-${{ env.openresty_version }}-${{ env.nginx_config_args }}-${{ hashFiles('src/**', 'config') }}" | sha256sum | cut -d ' ' -f1)" >> $GITHUB_ENV
 
       - name: NGINX - Install basic dependencies
         run: |
