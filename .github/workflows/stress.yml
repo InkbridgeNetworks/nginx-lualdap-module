@@ -312,27 +312,45 @@ jobs:
           retention-days: 14
 
       #
-      #  Gate on the ASan log. halt_on_error=0 allows a run to finish after a
-      #  memory error. A use-after-free (the connection finalizer writing an
-      #  UNBIND PDU through a freed ngx_connection_t) is therefore recorded,
-      #  but nginx keeps serving and the Lua suite alone would stay green. Fail
-      #  the job when any ASan or LSAN report is present. This step runs after
-      #  the upload step, so the evidence is always retained.
+      #  Gate on the ASan log. halt_on_error=0 lets a run finish after a memory
+      #  error, so a use-after-free is recorded while nginx keeps serving and
+      #  the Lua suite alone stays green. This step turns the log into a pass
+      #  or fail. It runs after the upload step, so the evidence is retained.
       #
-      - name: Tests - Fail on any ASan / LSAN report
+      #  Two rules:
+      #    1. Any AddressSanitizer memory-safety error (use-after-free, buffer
+      #       overflow, and the rest) fails the job. These are always bugs.
+      #    2. Any single leak block above LEAK_OBJECT_LIMIT objects fails the
+      #       job. An accumulating per-request leak shows as many objects of
+      #       one size (the op_ctx regression was 147); libldap's one-time
+      #       global SASL init, which LeakSanitizer cannot be made to suppress
+      #       here because it cannot symbolize the dlopen'd libraries at exit,
+      #       is a fixed baseline of small blocks (<=11 objects) that does not
+      #       grow with load. The limit passes the baseline and catches growth.
+      #
+      - name: Tests - Fail on memory-safety errors or accumulating leaks
+        env:
+          LEAK_OBJECT_LIMIT: "25"
         run: |
           ASAN_LOG="$PWD/build/test/log/asan.log"
-          found=0
+          rc=0
           for f in "$ASAN_LOG"*; do
             [ -f "$f" ] || continue
-            if grep -qE "ERROR: (Address|Leak)Sanitizer|runtime error:|SUMMARY: (Address|Leak)Sanitizer" "$f"; then
-              echo "::error::sanitizer reported a problem in $(basename "$f")"
-              echo "==> $f <=="
+            if grep -qE "ERROR: AddressSanitizer|runtime error:" "$f"; then
+              echo "::error::AddressSanitizer reported a memory-safety error in $(basename "$f")"
               sed -n '1,120p' "$f"
-              found=1
+              rc=1
+            fi
+            worst=$(grep -oE "leak of [0-9]+ byte\(s\) in [0-9]+ object" "$f" \
+                    | grep -oE "in [0-9]+ object" | grep -oE "[0-9]+" \
+                    | sort -rn | head -1)
+            if [ -n "$worst" ] && [ "$worst" -gt "$LEAK_OBJECT_LIMIT" ]; then
+              echo "::error::a leak block has $worst objects (> $LEAK_OBJECT_LIMIT) in $(basename "$f"), which looks like an accumulating leak"
+              grep -E "leak of .* object" "$f"
+              rc=1
             fi
           done
-          if [ "$found" -ne 0 ]; then
+          if [ "$rc" -ne 0 ]; then
             exit 1
           fi
-          echo "No ASan / LSAN errors reported."
+          echo "No memory-safety errors, and no leak block over $LEAK_OBJECT_LIMIT objects."
