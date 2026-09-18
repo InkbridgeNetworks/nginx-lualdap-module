@@ -462,6 +462,14 @@ ldap_operation_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket
 	}
 	ldap_memfree(mdn);
 	ldap_memfree(msg);
+	/*
+	 * The common terminal path for every operation result. op_ctx->res was
+	 * freed by ldap_parse_result (freeit=1) above; free the op_ctx wrapper
+	 * here so a successful add, modify, compare, delete, or rename does not
+	 * leak it. The read-success handler cleared coctx->cleanup, so the
+	 * coroutine cleanup does not free op_ctx.
+	 */
+	ngx_free(op_ctx);
 	return ret;
 }
 
