@@ -889,15 +889,33 @@ static int ldap_get_next_message_with_ctx(ngx_http_request_t *r, ngx_http_lua_so
 		// No data to be read
 		ret = NGX_AGAIN;
 	} else if (rc == -1) {
+		/*
+		 * The connection to the directory is gone, for example the directory
+		 * restarted. On the read event path the coroutine is parked on this
+		 * socket, and the read handler discards the return value, so the
+		 * coroutine has to be woken here or the request waits forever. On the
+		 * synchronous path from next_message no coroutine is waiting, so the
+		 * call only records the failure type, and next_message reports the
+		 * failure through the receive retval handler.
+		 */
 		ldap_get_option(ldap_conn->ld, LDAP_OPT_RESULT_CODE, &rc);
 		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX "ldap_result returned error with result code %d", rc);
+		ngx_http_lua_socket_handle_read_error(r, u, NGX_HTTP_LUA_SOCKET_FT_CLOSED);
 		ret = NGX_ERROR;
 	} else {
 		if (ldap_msgid(op_ctx->res) != op_ctx->msgid) {
+			/*
+			 * A message for another operation. Drop the message and keep
+			 * waiting for the message of this operation. An error return here
+			 * would leave a parked coroutine waiting forever, the same as the
+			 * branch above.
+			 */
 			ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
 				       "ldap_get_next_search_message: Message with unknown ID received, ignoring. Got %d, expected %d",
 				       ldap_msgid(op_ctx->res), op_ctx->msgid);
-			ret = NGX_ERROR;
+			ldap_msgfree(op_ctx->res);
+			op_ctx->res = NULL;
+			ret = NGX_AGAIN;
 		} else {
 			op_ctx->ldap_rc = rc;
 
