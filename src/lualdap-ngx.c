@@ -842,6 +842,30 @@ ldap_search_receive_retval_handler(ngx_http_request_t *r, ngx_http_lua_socket_tc
 				}
 			}
 
+			/*
+			 * A sync info message that is not refreshDone does not produce a
+			 * value for Lua, so the search needs the next message.
+			 * ldap_search_receive_retval_handler reads the next message now,
+			 * before the coroutine yields on the read event. nginx drives the
+			 * socket with edge-triggered epoll, so a message that arrived in
+			 * the same read as the message just consumed does not raise
+			 * another read event. A coroutine that yielded before reading the
+			 * next message would wait forever. slapd sends the sync info
+			 * messages of a refresh without a pause between the messages, so
+			 * several messages often arrive in one read on a stream that
+			 * starts from an old cookie.
+			 *
+			 * The coroutine is not waiting on the socket during the read, so
+			 * ldap_get_next_message_with_ctx only records success or failure
+			 * on the upstream. The recursive call to
+			 * ldap_search_receive_retval_handler then handles the new message
+			 * or the failure the same way as a message that arrived on the
+			 * read event path.
+			 */
+			if (ldap_get_next_message_with_ctx(r, u, op_ctx) != NGX_AGAIN) {
+				return ldap_search_receive_retval_handler(r, u, L);
+			}
+
 			conn->conn.connection->read->handler = ldap_socket_handler;
 			if (op_ctx->timeout > 0)
 				ngx_add_timer(conn->conn.connection->read, op_ctx->timeout);
@@ -890,13 +914,15 @@ static int ldap_get_next_message_with_ctx(ngx_http_request_t *r, ngx_http_lua_so
 		ret = NGX_AGAIN;
 	} else if (rc == -1) {
 		/*
-		 * The connection to the directory is gone, for example the directory
-		 * restarted. On the read event path the coroutine is parked on this
-		 * socket, and the read handler discards the return value, so the
-		 * coroutine has to be woken here or the request waits forever. On the
-		 * synchronous path from next_message no coroutine is waiting, so the
-		 * call only records the failure type, and next_message reports the
-		 * failure through the receive retval handler.
+		 * The connection to the directory has closed, for example because
+		 * the directory restarted. On the read event path the coroutine has
+		 * yielded on the socket, and ldap_search_handler discards the return
+		 * value. Without the call to ngx_http_lua_socket_handle_read_error,
+		 * the coroutine does not resume and the request waits forever. On the
+		 * synchronous path from next_message the coroutine is not waiting, so
+		 * ngx_http_lua_socket_handle_read_error only records the failure
+		 * type. next_message then reports the failure through
+		 * ngx_http_lua_socket_tcp_receive_retval_handler.
 		 */
 		ldap_get_option(ldap_conn->ld, LDAP_OPT_RESULT_CODE, &rc);
 		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, LUALDAP_PREFIX "ldap_result returned error with result code %d", rc);
@@ -905,10 +931,12 @@ static int ldap_get_next_message_with_ctx(ngx_http_request_t *r, ngx_http_lua_so
 	} else {
 		if (ldap_msgid(op_ctx->res) != op_ctx->msgid) {
 			/*
-			 * A message for another operation. Drop the message and keep
-			 * waiting for the message of this operation. An error return here
-			 * would leave a parked coroutine waiting forever, the same as the
-			 * branch above.
+			 * The message belongs to another operation.
+			 * ldap_get_next_message_with_ctx discards the message and returns
+			 * NGX_AGAIN, so the coroutine keeps waiting for the message of the
+			 * current operation. An NGX_ERROR return that does not resume the
+			 * coroutine would leave the yielded coroutine waiting forever. The
+			 * rc == -1 branch above gives the reason.
 			 */
 			ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
 				       "ldap_get_next_search_message: Message with unknown ID received, ignoring. Got %d, expected %d",
