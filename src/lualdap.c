@@ -506,7 +506,22 @@ static BerValue *A_setbval(lua_State *L, attrs_data *a, const char *n)
 	if (a->bi >= LUALDAP_MAX_VALUES) {
 		luaL_error(L, LUALDAP_PREFIX "too many values");
 		return NULL;
-	} else if (!lua_isstring(L, -1)) {
+	}
+
+	/*
+	 * A boolean is the LDAP Boolean literal, so a JSON boolean that reaches
+	 * the binding unconverted is stored, not misread as an instruction.
+	 */
+	if (lua_isboolean(L, -1)) {
+		const char *literal = lua_toboolean(L, -1) ? "TRUE" : "FALSE";
+
+		a->bvals[a->bi].bv_len = strlen(literal);
+		a->bvals[a->bi].bv_val = (char *)literal;
+		a->bi++;
+		return ret;
+	}
+
+	if (!lua_isstring(L, -1)) {
 		value_error(L, n);
 		return NULL;
 	}
@@ -547,31 +562,49 @@ static BerValue **A_nullval(lua_State *L, attrs_data *a)
 }
 
 /*
+** Check that the table on the stack is a sequence, keys 1 to n and no other.
+** A table with a named key is a JSON object that the caller decoded, which
+** has no value the directory could hold, and which would otherwise be sent
+** as an attribute with no values.
+*/
+static void A_seqcheck(lua_State *L, int tab, int n, const char *name)
+{
+	int keys = 0;
+
+	lua_pushnil(L);
+	while (lua_next(L, tab) != 0) {
+		keys++;
+		lua_pop(L, 1);
+	}
+	if (keys != n) {
+		luaL_error(L, LUALDAP_PREFIX "invalid value of attribute `%s' (table with keys outside the sequence)", name);
+	}
+}
+
+/*
 ** Store the value of an attribute.
 ** Valid values are:
-**	true => no values;
-**	string => one value; or
-**	table of strings => many values.
+**	a NULL lightuserdata (cjson.null, ngx.null) => no values;
+**	string, number, or boolean => one value; or
+**	sequence of strings, numbers, and booleans => many values.
 */
 static BerValue **A_tab2val(lua_State *L, attrs_data *a, const char *name)
 {
 	int tab = lua_gettop(L);
 	BerValue **ret = &(a->values[a->vi]);
-	if (lua_isboolean(L, tab) && (lua_toboolean(L, tab) == 1)) /* true */
+	if (lua_islightuserdata(L, tab) && (lua_touserdata(L, tab) == NULL)) /* null */
 		return NULL;
-	else if (lua_isstring(L, tab)) /* string */
-		A_setval(L, a, name);
-	else if (lua_istable(L, tab)) { /* list of strings */
+	else if (lua_istable(L, tab)) { /* sequence */
 		int i;
 		int n = lua_objlen(L, tab);
+		A_seqcheck(L, tab, n, name);
 		for (i = 1; i <= n; i++) {
 			lua_rawgeti(L, tab, i); /* push table element */
 			A_setval(L, a, name);
 		}
 		lua_pop(L, n);
-	} else {
-		value_error(L, name);
-		return NULL;
+	} else { /* one value, A_setbval refuses what it cannot store */
+		A_setval(L, a, name);
 	}
 	A_nullval(L, a);
 	return ret;

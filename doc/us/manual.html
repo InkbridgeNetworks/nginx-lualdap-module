@@ -133,7 +133,15 @@ entry = {
 }
 </pre>
 
-Attribute names cannot contain the <code>'\0'</code> character.
+<p>Attribute names cannot contain the <code>'\0'</code> character.</p>
+
+<p>A value is a string, a number, or a boolean, or a sequence of those.
+A number is sent as its digits, and a boolean as the LDAP Boolean literal
+<code>TRUE</code> or <code>FALSE</code>. A NULL lightuserdata, such as
+<code>cjson.null</code> or <code>ngx.null</code>, means no values, so a
+replace with it removes the attribute and a delete with it removes every
+value. A table with a key outside the sequence, such as a decoded JSON
+object, is an error, because the directory has no value to hold for it.</p>
 
 <h2><a name="dn"></a>Distinguished names</h2>
 
@@ -317,7 +325,7 @@ ld:modify {"mydn=newuser,ou=people,dc=ldp,dc=world",
     { '=', givenName = "New", cn = "New", sn = "User", },
     { '+', o = { "University", "College", },
            mail = "newuser@university.edu", },
-    { '-', abc = true, tel = "123456758", },
+    { '-', abc = cjson.null, tel = "123456758", },
     { '+', tel = "13579113", },
 }()
 
