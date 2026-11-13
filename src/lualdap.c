@@ -118,6 +118,9 @@ typedef struct {
 					  //!< not the entries deleted since the cookie that the client
 					  //!< resumed from. The streamBegins marker reports the flag as
 					  //!< refreshPresent.
+	int ended;			  //!< The server sent the final result (LDAP_RES_SEARCH_RESULT)
+					  //!< of the search operation, with any result code. search_close
+					  //!< does not abandon an ended search.
 	ngx_pool_cleanup_t *pool_cleanup; //!< Per-request cleanup hook that abandons the search
 					  //!< when the request pool is destroyed (covers abrupt
 					  //!< client disconnect / handler kill / lua error /
@@ -1170,13 +1173,15 @@ typedef struct {
  * search_close NULLs our handler when the search ends normally before
  * the request, so by the time we fire either the request died abruptly
  * (Lua never reached search_close, abandon is overdue) or this is a
- * no-op left in place by the disarm.
+ * no-op left in place by the disarm. A paged search with more pages
+ * keeps the handler armed after the final result of the page, so the
+ * handler skips the abandon for an ended search, as search_close does.
  */
 static void search_pool_cleanup_handler(void *data)
 {
 	search_pool_cleanup_t *pc = data;
 
-	if (pc->conn && pc->conn->ld) {
+	if (pc->conn && pc->conn->ld && !(pc->search && pc->search->ended)) {
 		ldap_abandon(pc->conn->ld, pc->msgid);
 	}
 	if (pc->search) {
@@ -1224,7 +1229,16 @@ static void search_close(lua_State *L, search_data_t *search)
 
 		/* Free up resources on the server allocated to paginated or persistent search.
 		 * conn->ld may be NULL if the connection was closed before the search was GC'd. */
-		if (conn->ld)
+
+		/*
+		 * Do not abandon a search that the server has ended. A server discards
+		 * an Abandon request for an operation that is no longer in progress
+		 * (RFC 4511 section 4.11), so the Abandon request frees nothing. slapd's
+		 * syncprov overlay sends the final result of a persistent search before
+		 * syncprov drops the search, and an Abandon request that arrives between
+		 * the two steps deadlocks every later write to the database.
+		 */
+		if (conn->ld && !search->ended)
 			ldap_abandon(conn->ld, search->msgid);
 	}
 
@@ -1444,6 +1458,7 @@ static search_data_t *create_search(lua_State *L, int conn_index, int msgid, str
 	search->idset = NULL;
 	search->idset_next = 0;
 	search->refresh_present = 0;
+	search->ended = FALSE;
 	search->pool_cleanup = NULL;
 
 	conn = (conn_data *)lua_touserdata(L, conn_index);

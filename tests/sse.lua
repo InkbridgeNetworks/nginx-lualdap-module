@@ -318,6 +318,69 @@ function m:TestEntryUUIDOnDelete()
     luaunit.assertEquals(id3, body_cookie)
 end
 
+-- The number of Abandon requests that the server has received, from the
+-- monitor database (slapd-monitor(5)). The bind DN of the suite can read
+-- cn=Monitor.
+local function abandons_received(self)
+    local _, json = self:sendRequest('GET', 'ldap-search?' .. qs({
+        base  = 'cn=Abandon,cn=Operations,cn=Monitor',
+        scope = 'base',
+        attrs = 'monitorOpInitiated',
+    }))
+    luaunit.assertEquals(json.ok, true, 'cannot read cn=Monitor: ' .. tostring(json.err))
+    local count = json.entries[1].attrs.monitorOpInitiated
+    if type(count) == 'table' then count = count[1] end
+    return tonumber(count)
+end
+
+-- After a client deletes the base entry of a persistent search, the server
+-- ends the search on the next write to the database, with result 4096
+-- (e-syncRefreshRequired, RFC 4533 section 2.6). The binding must not send an
+-- Abandon request for the ended search. slapd's syncprov overlay sends the
+-- result before syncprov drops the search, and an Abandon request that arrives
+-- between the two steps deadlocks every later write to the database.
+function m:TestNoAbandonAfterServerEndsSearch()
+    local BASE_DN  = 'cn=ci_sse_base_gone,dc=example,dc=org'
+    local WRITE_DN = 'cn=ci_sse_base_gone_write,dc=example,dc=org'
+
+    -- A WRITE_DN left by an earlier run makes the add fail, and a failed
+    -- add does not end the search.
+    self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = WRITE_DN }))
+    self:sendRequest('GET', 'ldap-add?' .. qs({ dn = BASE_DN }))
+    self:finally(function(self)
+        self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = BASE_DN }))
+        self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = WRITE_DN }))
+    end)
+
+    -- An Unbind request right after the end of the search deadlocks slapd
+    -- the same way, so the endpoint waits before closing the connection.
+    local tcp = open_sse('ldap-sse?' .. qs({ base = BASE_DN, close_delay = 1 }))
+    luaunit.assertEquals(wait_for_stream_begins(tcp), 'streamBegins')
+
+    local before = abandons_received(self)
+
+    self:sendRequest('GET', 'ldap-delete?' .. qs({ dn = BASE_DN }))
+    -- The next write makes the server look for the base of the search
+    -- and end the search.
+    self:sendRequest('GET', 'ldap-add?' .. qs({ dn = WRITE_DN }))
+
+    -- The endpoint closes the stream when the search ends.
+    tcp:settimeout(5)
+    local _, err
+    repeat
+        _, err = tcp:receive('*l')
+    until err
+    tcp:close()
+    luaunit.assertEquals(err, 'closed', 'the server did not end the search')
+
+    -- slapd counts an Abandon request on another thread than the stream.
+    -- Wait for slapd to count any Abandon request before the check.
+    socket.sleep(0.5)
+    luaunit.assertEquals(abandons_received(self), before)
+
+    self:finallyPop()
+end
+
 -- Resumption: capture a cookie from a delete event on a fresh sync, then
 -- reconnect with that cookie. The server must accept the cookie and skip
 -- the refresh phase, so on the second connection we should see new changes
